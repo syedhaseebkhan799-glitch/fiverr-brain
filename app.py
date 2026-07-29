@@ -35,10 +35,11 @@ with st.sidebar:
     )
     st.divider()
     st.caption("Knowledge base layers: profile & gigs, policies, SOPs.")
-    if st.button("🔄 Rebuild index"):
+    if st.button(" Rebuild index"):
         from src import ingest
         with st.spinner("Reindexing knowledge base..."):
             n = ingest.build_index(verbose=False)
+            st.session_state.brain.refresh_collection()
         st.success(f"Reindexed {n} chunks.")
 
 # --- Render chat history ---
