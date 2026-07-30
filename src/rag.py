@@ -23,6 +23,11 @@ class FiverrBrain:
         self.collection = self.client.get_or_create_collection(config.COLLECTION_NAME)
         self.history = []  # simple in-memory session history: list of (role, text)
 
+    def refresh_collection(self):
+        self.client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
+        self.collection = self.client.get_or_create_collection(config.COLLECTION_NAME)
+        self.history = []  # simple in-memory session history: list of (role, text)
+
     def _call_llm(self, prompt: str) -> str:
         response = self.client_llm.chat.completions.create(
             model=config.OPENAI_MODEL,
