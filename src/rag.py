@@ -45,11 +45,21 @@ class FiverrBrain:
         query_embedding = raw.tolist() if hasattr(raw, "tolist") else list(raw)
 
         where = {"layer": layer_filter} if layer_filter else None
-        results = self.collection.query(
-            query_embeddings=query_embedding,
-            n_results=top_k,
-            where=where,
-        )
+
+        try:
+            results = self.collection.query(
+                query_embeddings=query_embedding,
+                n_results=top_k,
+                where=where,
+            )
+        except Exception:
+            self.refresh_collection()
+            results = self.collection.query(
+                query_embeddings=query_embedding,
+                n_results=top_k,
+                where=where,
+            )
+
         docs = results.get("documents", [[]])[0]
         metas = results.get("metadatas", [[]])[0]
         return list(zip(docs, metas))
