@@ -6,6 +6,7 @@ save the result back into the knowledge base (Layer 1) for reindexing.
 from pathlib import Path
 
 from .. import config
+from ..rag import context_of, sources_of
 
 
 NEW_GIG_INSTRUCTIONS = """You are drafting a NEW Fiverr gig listing for this seller,
@@ -18,23 +19,43 @@ Do not invent pricing -- ask the user for pricing tiers if not provided."""
 def run(brain, brief: str):
     """brief: short description of the new gig idea from the user."""
     chunks = brain.retrieve(brief, layer_filter="profile_gigs")
+    context = context_of(
+        chunks,
+        fallback="(No existing gigs indexed yet — use a clean, professional Fiverr tone.)",
+    )
     prompt = (
         f"{NEW_GIG_INSTRUCTIONS}\n\n"
-        f"Reference chunks from existing gigs (style/tone match):\n"
-        + "\n---\n".join(doc for doc, _ in chunks)
-        + f"\n\nNew gig brief from seller: {brief}\n\n"
+        f"Reference chunks from existing gigs (style/tone match):\n{context}\n\n"
+        f"New gig brief from seller: {brief}\n\n"
         f"Draft the new gig listing now."
     )
-    return brain._call_llm(prompt)
+    answer = brain._call_llm(prompt)
+
+    brain.remember(f"[new-gig] {brief}", answer)
+    return {
+        "answer": answer,
+        "sources": sources_of(chunks),
+        "chunks_used": len(chunks),
+    }
 
 
 def save_and_reindex(brain, filename: str, content: str):
     """Save a newly drafted gig into kb/profile_gigs and trigger reindex."""
     from .. import ingest
 
-    target = Path(config.KB_FOLDERS["profile_gigs"]) / filename
-    if not target.name.endswith(".md"):
+    folder = Path(config.KB_FOLDERS["profile_gigs"]).resolve()
+    # Only the bare name -- never let a path like "../../x.md" escape the KB.
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise ValueError("Invalid filename.")
+
+    target = folder / safe_name
+    if target.suffix.lower() != ".md":
         target = target.with_suffix(".md")
+    if target.resolve().parent != folder:
+        raise ValueError("Refusing to write outside the knowledge base folder.")
+
     target.write_text(content, encoding="utf-8")
     ingest.build_index(verbose=False)
+    brain.refresh_collection()
     return str(target)

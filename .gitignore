@@ -1,5 +1,12 @@
 .env
+.streamlit/secrets.toml
 Open AI api key.txt
 venv/
 __pycache__/
 *.pyc
+
+# Local runtime state -- ephemeral on Streamlit Cloud, not worth committing.
+data/onboarding.sqlite3
+
+# A second clone of this repo ended up nested here. Keep git out of it.
+fiverr-brain/

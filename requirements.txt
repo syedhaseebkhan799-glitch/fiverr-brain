@@ -1,5 +1,7 @@
-streamlit
-chromadb
-sentence-transformers
-openai
-python-dotenv
+# Pinned so a new upstream release can never break the deployed app.
+# Bump these deliberately, then redeploy and test.
+streamlit==1.60.0
+chromadb==1.5.9
+sentence-transformers==5.6.1
+openai==2.50.0
+python-dotenv==1.2.2

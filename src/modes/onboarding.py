@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .. import config
+from ..rag import context_of, sources_of
 
 ONBOARDING_STEPS = [
     "sop_order_handling",
@@ -37,6 +38,17 @@ def mark_step_complete(trainee: str, step: str):
     conn.close()
 
 
+def unmark_step(trainee: str, step: str):
+    """Undo a completed step (the sidebar checkbox can be unticked)."""
+    conn = _get_conn()
+    conn.execute(
+        "DELETE FROM onboarding_progress WHERE trainee = ? AND step = ?",
+        (trainee, step),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_progress(trainee: str):
     conn = _get_conn()
     rows = conn.execute(
@@ -53,11 +65,30 @@ def get_progress(trainee: str):
 
 def run(brain, trainee: str, question: str):
     """Answer an onboarding question using only the SOP layer."""
-    chunks = brain.retrieve(question, layer_filter="sops")
-    context = "\n---\n".join(doc for doc, _ in chunks)
+    chunks = brain.retrieve(question, layer_filter="sops", use_history=True)
+
+    if not chunks:
+        return {
+            "answer": (
+                "That isn't covered by any SOP in the knowledge base yet. "
+                "Ask the seller to add it to `kb/sops/`, then rebuild the index."
+            ),
+            "sources": [],
+            "chunks_used": 0,
+        }
+
+    context = context_of(chunks)
     prompt = (
         "You are training a new hire on this business's internal SOPs. "
-        "Explain clearly and simply, using only the SOP context below.\n\n"
+        "Explain clearly and simply, using only the SOP context below. "
+        "If the SOPs don't cover it, say so rather than guessing.\n\n"
         f"SOP context:\n{context}\n\nNew hire's question: {question}"
     )
-    return brain._call_llm(prompt)
+    answer = brain._call_llm(prompt)
+
+    brain.remember(f"[onboarding:{trainee}] {question}", answer)
+    return {
+        "answer": answer,
+        "sources": sources_of(chunks),
+        "chunks_used": len(chunks),
+    }

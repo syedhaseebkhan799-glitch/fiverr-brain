@@ -36,6 +36,28 @@ CHUNK_OVERLAP = 150
 # --- Retrieval ---
 TOP_K = 4
 
+# --- Limits ---
+# Cap what we send so a huge paste can't overflow the context window,
+# and cap what comes back so long drafts aren't cut off mid-sentence.
+MAX_INPUT_CHARS = 8000      # per user message, before it reaches the prompt
+MAX_PROMPT_CHARS = 24000    # whole assembled prompt (~6k tokens)
+MAX_OUTPUT_TOKENS = 2000
+
+# Cosine distance above which a retrieved chunk is treated as irrelevant.
+# Calibrated with scripts/check_threshold.py against this KB: real topical
+# matches measured 0.79-1.43, off-topic queries 1.54-2.04. 1.49 sits in the gap.
+# The margin is narrow because the KB is only 8 files -- re-run the script and
+# retune after adding content, or genuine questions will start being refused.
+MAX_DISTANCE = 1.49
+
+
+def is_ephemeral_host() -> bool:
+    """True when running on a host whose filesystem resets on restart
+    (Streamlit Community Cloud). Rebuilt indexes and logs will not survive."""
+    return any(
+        os.getenv(v) for v in ("STREAMLIT_SHARING_MODE", "STREAMLIT_RUNTIME_ENV")
+    ) or os.path.isdir("/mount/src")
+
 # --- Logging ---
 LOGS_DIR = PROJECT_ROOT / "logs"
 QUERY_LOG_FILE = LOGS_DIR / "query_log.jsonl"
