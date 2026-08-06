@@ -2,7 +2,7 @@
 /optimize mode: takes an existing gig (by name or pasted text) and
 suggests improvements -- clarity, SEO keywords, structure, upsell ideas.
 """
-from ..rag import context_of, fence, sources_of
+from ..rag import citations_of, context_of, fence, sources_of
 
 OPTIMIZE_INSTRUCTIONS = """You are reviewing an EXISTING Fiverr gig for improvement.
 Suggest concrete edits: clearer tagline, stronger opening hook, missing
@@ -15,14 +15,16 @@ Keep suggestions practical and specific to the text given, not generic advice.""
 PASTED_TEXT_MIN_CHARS = 200
 
 
-def run(brain, gig_name_or_text: str):
-    chunks = brain.retrieve(gig_name_or_text, layer_filter="profile_gigs")
+def run(brain, gig_name_or_text: str, seller_id: str = None):
+    chunks = brain.retrieve(
+        gig_name_or_text, layer_filter="profile_gigs", seller_id=seller_id
+    )
     looks_pasted = len(gig_name_or_text) >= PASTED_TEXT_MIN_CHARS
 
     if not chunks and not looks_pasted:
         # Named a gig we don't have. Say so instead of silently optimizing
         # whatever happened to be the nearest neighbour.
-        available = _list_gig_names(brain)
+        available = _list_gig_names(brain, seller_id)
         listing = "\n".join(f"- {name}" for name in available) or "- (none indexed yet)"
         return {
             "answer": (
@@ -34,6 +36,7 @@ def run(brain, gig_name_or_text: str):
             ),
             "sources": [],
             "chunks_used": 0,
+            "citations": [],
         }
 
     if chunks:
@@ -58,13 +61,20 @@ def run(brain, gig_name_or_text: str):
         "answer": answer,
         "sources": sources_of(chunks),
         "chunks_used": len(chunks),
+        "citations": citations_of(chunks),
     }
 
 
-def _list_gig_names(brain):
-    """Every gig file currently in the profile_gigs layer."""
+def _list_gig_names(brain, seller_id: str = None):
+    """Every gig currently indexed in the profile_gigs layer.
+
+    Scoped to the selected seller: offering another seller's gigs as
+    alternatives would be a leak, not a helpful suggestion.
+    """
     try:
-        got = brain.collection.get(where={"layer": "profile_gigs"}, include=["metadatas"])
+        got = brain.collection.get(
+            where=brain._where("profile_gigs", seller_id), include=["metadatas"]
+        )
     except Exception:
         return []
     names = set()

@@ -2,11 +2,20 @@
 
 An internal RAG-powered chatbot for your Fiverr business. Ask it about your
 gigs, pricing, policies, and SOPs — it answers only from your own knowledge
-base, cites its sources, and says "I don't know" instead of guessing.
+base, shows the exact chunks it used, and says "I don't know" instead of
+guessing.
 
-Built cheap: local embeddings (sentence-transformers, free), local vector
-store (ChromaDB, free), and OpenAI `gpt-4o-mini` for the LLM (paid, but
-fractions of a cent per question).
+It also onboards a seller profile: a six-step form covering basic information,
+bio, skills, gigs with their three pricing packages, portfolio and reviews —
+or a screenshot of a Fiverr page, read by a vision model and shown to you for
+checking before anything is saved.
+
+Vector store is ChromaDB, running locally and free. Embeddings default to
+OpenAI `text-embedding-3-small`, with a free offline model one line away. The
+LLM is `gpt-4o-mini` — fractions of a cent per question.
+
+> **Full setup instructions: [`docs/SETUP.md`](docs/SETUP.md).** The sections
+> below are the short version plus the operational details worth knowing.
 
 ## 1. Setup
 
@@ -31,18 +40,35 @@ pip install -r requirements.txt
 
 ## 3. Build the knowledge base index
 
-Your gigs, policies, and SOPs live as markdown files under `kb/`:
-- `kb/profile_gigs/` — your gigs and seller profile
-- `kb/policies/` — Fiverr policy summaries
-- `kb/sops/` — your internal workflows
+Knowledge comes from two places now:
 
-Edit/add `.md` files there, then build (or rebuild) the index:
+| Source | Where | Edited how |
+|---|---|---|
+| Seller profiles and gigs | `data/fiverr_brain.sqlite3` | In the app, or by screenshot import |
+| Policies and SOPs | `kb/policies/`, `kb/sops/` | Hand-written markdown |
+
+`kb/profile_gigs/*_profile.md` is still written on every save, but it is now a
+**generated export** — readable and diffable, not read back. Flat markdown
+cannot round-trip three pricing packages per gig, repeatable FAQs, individual
+reviews, or a per-field `null` from a screenshot.
+
+Coming from the old markdown-only layout? Import it once:
+
+```bash
+python scripts/migrate_kb_to_store.py            # preview, writes nothing
+python scripts/migrate_kb_to_store.py --apply    # import
+```
+
+Then build the index:
 
 ```bash
 python scripts/reindex.py
 ```
 
-Run this again any time you change files in `kb/`.
+Re-run it after editing `kb/policies/` or `kb/sops/` by hand, or after changing
+the embedding provider. You do **not** need it after saving a profile in the
+app — the wizard updates that seller's vectors on its own and leaves everyone
+else's alone.
 
 ## 4. Run the app
 
@@ -57,11 +83,21 @@ deploy it separately (e.g. Streamlit Community Cloud).
 ## 5. Modes
 
 Use the sidebar to switch modes:
-- **Ask a question** — general Q&A grounded in your KB
+- **👤 Profile onboarding** — the six-step form. A draft is saved on every step
+  change, so closing the tab costs nothing
+- **🖼️ Import from screenshot** — drop in a Fiverr profile or gig screenshot;
+  it is read by a vision model, shown to you for checking, and pre-fills the
+  onboarding form. Nothing is saved until you confirm
+- **Ask a question** — general Q&A grounded in your KB, with the source chunks
+  shown under each answer
 - **/new-gig** — drafts a new gig listing in your existing style
 - **/optimize** — suggests improvements to an existing gig
 - **/onboarding** — walks a new hire through your SOPs
 - **/buyer-reply** — drafts a reply to a buyer message
+
+With more than one seller stored, a picker appears in the sidebar. Every answer
+is then grounded in that seller's own profile only — policies and SOPs stay
+shared, because they belong to the business rather than to one seller.
 
 ## 6. Updating knowledge over time
 
@@ -72,40 +108,44 @@ Use the sidebar to switch modes:
   with `"unanswered": true`, and shown in the sidebar under **Knowledge gaps** —
   review these periodically to see what's missing from your knowledge base.
 
-### Non-English buyer messages
+### Embeddings: which provider, and what it costs
 
-The default embedding model (`all-MiniLM-L6-v2`) is English-only, so retrieval
-degrades on other languages. Measured on this KB (7 cross-language queries):
+`EMBEDDING_PROVIDER` in `.env` picks one of two:
 
-| Model | Correct hits | Weights | Load time |
-|---|---|---|---|
-| `all-MiniLM-L6-v2` (default) | 4/7 | ~91 MB | ~15 s |
-| `paraphrase-multilingual-MiniLM-L12-v2` | 5/7 | ~471 MB | ~55 s |
+| | `openai` (default) | `local` |
+|---|---|---|
+| Model | `text-embedding-3-small` | `all-MiniLM-L6-v2` |
+| Non-English questions | Handled well | Poor — 4/7 on a cross-language test of this KB |
+| Cost | Per query **and** per reindex | Free |
+| Network | Required | None |
+| Memory | Negligible | ~400 MB of torch + weights |
 
-One extra hit for 5x the memory. On Streamlit Cloud's ~1 GB container that
-risks an out-of-memory crash, so the English model stays the default. To switch
-anyway (e.g. running locally with plenty of RAM):
+The default switched to OpenAI because the local model's non-English weakness
+was a real, measured limitation. `local` remains fully supported and is what
+the test suite runs on.
 
-```bash
-# in .env
-EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
-```
+**Reindex after changing this** — `python scripts/reindex.py`. A mismatch
+produces no error; retrieval just silently returns nothing. The app stamps the
+model and provider onto the collection and shows a warning banner when they
+disagree with the current settings.
 
-**You must reindex after changing this** — `python scripts/reindex.py`. Both
-models are 384-dimensional, so a mismatch produces no error; retrieval just
-silently returns nothing. The app detects this and shows a warning banner.
+### The relevance threshold is not optional
 
-### Re-tune the relevance threshold after big KB changes
+"Is this chunk actually relevant?" is decided by `MAX_DISTANCE`, and it is what
+makes "I don't know" possible at all. It is calibrated **per provider and per
+knowledge base**:
 
-"Is this chunk actually relevant?" is decided by `config.MAX_DISTANCE`. It is
-calibrated to the current KB. After adding a lot of content, re-check it:
+- The `local` default (1.49) was measured against the shipped KB.
+- The `openai` default (1.35) is an **estimate**. It has never been measured
+  against a real index. The app says so in a banner until you set it yourself.
 
 ```bash
 python scripts/check_threshold.py
 ```
 
 It prints the distances for questions the KB *should* and *should not* answer,
-and suggests a new threshold. Too high → the bot answers off-topic questions
+suggests a threshold in the gap, and tells you the `.env` line to add. Re-run it
+after adding a lot of content. Too high → the bot answers off-topic questions
 from irrelevant chunks. Too low → it says "I don't know" to real questions.
 
 ## 7. Deploying to Streamlit Community Cloud
@@ -126,9 +166,11 @@ from irrelevant chunks. Too low → it says "I don't know" to real questions.
 ### Known limits of the free tier
 
 - **The filesystem is ephemeral.** "Rebuild index" works for the current
-  session, but the container resets to whatever is in git on restart. For a
-  permanent KB change: edit `kb/`, run `python scripts/reindex.py` locally,
-  commit `data/chroma_db/`, and push.
+  session, but the container resets to whatever is in git on restart. This now
+  includes **the profile database** — which matters a great deal for a feature
+  whose whole job is saving a profile. The app warns on every save. For a
+  permanent change: do the work locally, then commit
+  `data/fiverr_brain.sqlite3`, `data/chroma_db/` and `kb/`, and push.
 - Same for `logs/query_log.jsonl` and onboarding progress — they reset too.
 - ~1 GB RAM. The embedding model is shared process-wide (`rag.get_embed_model`),
   so don't reintroduce a per-session `SentenceTransformer(...)`.
@@ -140,12 +182,20 @@ pip install pytest
 python -m pytest tests/ -q
 ```
 
-57 tests, each mapped to a bug that was actually present in the app: relevance
-thresholding, follow-up vs topic-change retrieval, mode return contracts,
-prompt-injection fencing, OpenAI error handling, atomic reindexing, concurrent
-rebuild locking, embedding-model/index mismatch, path traversal, and log
-robustness. **No test calls the OpenAI API** — the LLM is stubbed, so the suite
-is free to run. Run it before every deploy.
+210 tests. The original 57 each map to a bug that was actually present in the
+app: relevance thresholding, follow-up vs topic-change retrieval, mode return
+contracts, prompt-injection fencing, OpenAI error handling, atomic reindexing,
+concurrent rebuild locking, embedding-model/index mismatch, path traversal and
+log robustness. The rest cover the profile schema and its SQLite round trip,
+document splitting and per-seller upsert, seller isolation, citations, the
+onboarding form's coercion and drafts, the KB migration, and the screenshot
+import — upload validation, EXIF stripping, schema binding, confidence and
+merging.
+
+**No test spends money.** The chat model and the vision model are both stubbed,
+and `tests/conftest.py` forces embeddings onto the local provider. No test
+writes to the real profile database, query log or `kb/` folder either — they
+are redirected to a temp directory. Run the suite before every deploy.
 
 ## Ground rules
 

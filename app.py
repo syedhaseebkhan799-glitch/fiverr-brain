@@ -4,9 +4,12 @@ Run with: streamlit run app.py
 """
 import streamlit as st
 
-from src import config, logging_utils
-from src.rag import FiverrBrain, LLMError
+from src import config, logging_utils, ocr_ui, profile_setup, profile_ui
+from src.rag import EmbeddingError, FiverrBrain, LLMError
 from src.modes import new_gig, optimize, onboarding, buyer_reply
+
+PROFILE_MODE = "👤 Profile onboarding"
+OCR_MODE = "🖼️ Import from screenshot"
 
 st.set_page_config(page_title="Fiverr Brain", page_icon="🧠", layout="centered")
 
@@ -40,17 +43,48 @@ except Exception as e:
 if brain.index_warning:
     st.warning(brain.index_warning)
 
+if config.MAX_DISTANCE_IS_ESTIMATED:
+    # The refusal boundary is what stops the brain answering from irrelevant
+    # chunks. Running on an unmeasured estimate is workable but the user
+    # should know, rather than discovering it through a strange answer.
+    st.info(
+        f"Relevance threshold `MAX_DISTANCE={config.MAX_DISTANCE}` is an "
+        f"estimate for the **{config.EMBEDDING_PROVIDER}** embeddings, not a "
+        f"measurement. Run `python scripts/check_threshold.py` once and set "
+        f"`MAX_DISTANCE` in your `.env` to what it suggests."
+    )
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # --- Sidebar ---
 with st.sidebar:
     st.header("Mode")
-    mode = st.radio(
-        "Choose a mode",
-        ["Ask a question", "/new-gig", "/optimize", "/onboarding", "/buyer-reply"],
-    )
+    MODES = [
+        PROFILE_MODE,
+        OCR_MODE,
+        "Ask a question",
+        "/new-gig",
+        "/optimize",
+        "/onboarding",
+        "/buyer-reply",
+    ]
+    # First visit of a session lands on onboarding until the profile is set up.
+    # After that the radio owns the value, so a seller who deliberately switches
+    # away with an incomplete profile isn't dragged back on every rerun.
+    if "mode" not in st.session_state:
+        st.session_state.mode = (
+            "Ask a question"
+            if profile_setup.profile_status()["complete"]
+            else PROFILE_MODE
+        )
+    mode = st.radio("Choose a mode", MODES, key="mode")
 
+    st.divider()
+    profile_ui.render_sidebar_status()
+    # Which seller every answer is grounded in. Shown only when there is more
+    # than one, so the common single-seller case stays uncluttered.
+    seller_id = profile_ui.render_seller_picker()
     st.divider()
     trainee = "demo_trainee"
     if mode == "/onboarding":
@@ -81,6 +115,9 @@ with st.sidebar:
                 brain.refresh_collection()
         except ingest.RebuildInProgress as e:
             st.info(str(e))
+            n = None
+        except EmbeddingError as e:
+            st.error(f"Reindex failed, your existing index is unchanged.\n\n{e}")
             n = None
         except Exception as e:
             st.error(f"Reindex failed, your existing index is unchanged.\n\n`{e}`")
@@ -113,6 +150,15 @@ with st.sidebar:
             st.caption("Questions the KB could not answer — consider adding content.")
             for g in gaps[-15:]:
                 st.markdown(f"- {g['question']}")
+
+# --- These two are forms, not chats: render and stop here ---
+if mode == PROFILE_MODE:
+    profile_ui.render(brain)
+    st.stop()
+
+if mode == OCR_MODE:
+    ocr_ui.render(brain)
+    st.stop()
 
 # --- Render chat history ---
 for msg in st.session_state.messages:
@@ -149,33 +195,32 @@ if raw_input_text:
 
     answer = None
     sources = []
+    citations = []
     chunks_used = 0
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
                 if mode == "Ask a question":
-                    result = brain.ask(user_input)
-                    answer = result["answer"]
-                    sources = result["sources"]
-                    chunks_used = result["chunks_used"]
+                    result = brain.ask(user_input, seller_id=seller_id)
                 elif mode == "/new-gig":
-                    result = new_gig.run(brain, user_input)
+                    result = new_gig.run(brain, user_input, seller_id=seller_id)
                 elif mode == "/optimize":
-                    result = optimize.run(brain, user_input)
+                    result = optimize.run(brain, user_input, seller_id=seller_id)
                 elif mode == "/onboarding":
                     result = onboarding.run(brain, trainee=trainee, question=user_input)
                 elif mode == "/buyer-reply":
-                    result = buyer_reply.run(brain, user_input)
+                    result = buyer_reply.run(brain, user_input, seller_id=seller_id)
                 else:
-                    result = {"answer": "Unknown mode.", "sources": [], "chunks_used": 0}
+                    result = {"answer": "Unknown mode.", "sources": [],
+                              "chunks_used": 0, "citations": []}
 
-                if mode != "Ask a question":
-                    answer = result["answer"]
-                    sources = result["sources"]
-                    chunks_used = result["chunks_used"]
+                answer = result["answer"]
+                sources = result["sources"]
+                chunks_used = result["chunks_used"]
+                citations = result.get("citations", [])
 
-            except LLMError as e:
+            except (LLMError, EmbeddingError) as e:
                 answer = f"⚠️ {e}"
             except Exception as e:
                 answer = (
@@ -187,6 +232,20 @@ if raw_input_text:
         if sources:
             display += f"\n\n*Sources: {', '.join(sources)}*"
         st.markdown(display)
+
+        # The chunks the answer was actually built from. Filenames say which
+        # document; this says which sentences, so a claim can be checked.
+        if citations:
+            with st.expander(f"📎 {len(citations)} source chunk(s) used"):
+                for c in citations:
+                    label = c["source"]
+                    if c["sectionType"] not in ("unknown", c["layer"]):
+                        label += f" · {c['sectionType']}"
+                    if c["sourceType"] == "ocr":
+                        label += " · read from a screenshot"
+                    st.markdown(f"**{label}**")
+                    st.text(c["text"])
+                    st.divider()
 
     # Only commit the exchange to history once we actually have a reply,
     # so a failed call can't leave a dangling user message.

@@ -5,7 +5,7 @@ seller's gigs, policies, and messaging SOPs so tone and facts stay consistent.
 The buyer's message is untrusted input, so it is fenced as data before it
 reaches the model -- a buyer must never be able to instruct the assistant.
 """
-from ..rag import context_of, fence, sources_of
+from ..rag import citations_of, context_of, fence, sources_of
 
 REPLY_INSTRUCTIONS = """You are drafting a reply to a Fiverr buyer's message on
 behalf of the seller. Use the context (gigs, policies, SOPs) to keep facts
@@ -20,8 +20,9 @@ you'll confirm and flag it, and add a line at the end starting with
 "NEEDS SELLER REVIEW:" explaining what you could not commit to."""
 
 
-def run(brain, buyer_message: str):
-    chunks = brain.retrieve(buyer_message)  # search across all layers
+def run(brain, buyer_message: str, seller_id: str = None):
+    # Search across all layers, but only this seller's own content.
+    chunks = brain.retrieve(buyer_message, seller_id=seller_id)
     context = context_of(chunks, fallback="(No matching gigs, policies, or SOPs found.)")
 
     prompt = (
@@ -44,4 +45,5 @@ def run(brain, buyer_message: str):
         "answer": answer,
         "sources": sources_of(chunks),
         "chunks_used": len(chunks),
+        "citations": citations_of(chunks),
     }

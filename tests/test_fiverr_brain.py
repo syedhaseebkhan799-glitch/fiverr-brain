@@ -7,43 +7,15 @@ makes a real OpenAI call -- the LLM is stubbed, so the suite is free to run.
     python -m pytest tests/ -q
 """
 import json
-import os
-import sqlite3
-import sys
-import threading
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ.setdefault("OPENAI_API_KEY", "test-key-not-used")
-
 from src import config, ingest, logging_utils          # noqa: E402
 from src.rag import (                                   # noqa: E402
-    FiverrBrain, LLMError, fence, get_embed_model, sources_of,
+    FiverrBrain, LLMError, citations_of, fence, get_embed_model,
 )
 from src.modes import buyer_reply, new_gig, onboarding, optimize  # noqa: E402
-
-
-@pytest.fixture(scope="session")
-def brain():
-    b = FiverrBrain()
-    b._call_llm = lambda prompt: "[stubbed llm reply]"
-    return b
-
-
-@pytest.fixture(autouse=True)
-def clean_history(brain):
-    brain.reset_history()
-    yield
-    brain.reset_history()
-
-
-@pytest.fixture(autouse=True)
-def isolated_log(tmp_path, monkeypatch):
-    """Never let a test append to the real logs/query_log.jsonl."""
-    monkeypatch.setattr(config, "LOGS_DIR", tmp_path)
-    monkeypatch.setattr(config, "QUERY_LOG_FILE", tmp_path / "query_log.jsonl")
 
 
 # --------------------------------------------------------------------------
@@ -143,10 +115,12 @@ def _modes(brain):
                          ["ask", "new_gig", "optimize", "onboarding", "buyer_reply"])
 def test_every_mode_returns_the_same_shape(brain, name):
     result = _modes(brain)[name]()
-    assert set(result) == {"answer", "sources", "chunks_used"}
+    assert set(result) == {"answer", "sources", "chunks_used", "citations"}
     assert isinstance(result["answer"], str) and result["answer"].strip()
     assert isinstance(result["sources"], list)
     assert isinstance(result["chunks_used"], int)
+    assert isinstance(result["citations"], list)
+    assert len(result["citations"]) == result["chunks_used"]
 
 
 @pytest.mark.parametrize("name", ["ask", "optimize", "onboarding", "buyer_reply"])
@@ -442,3 +416,144 @@ def test_limits_are_sane():
     assert config.CHUNK_OVERLAP < config.CHUNK_SIZE
     assert config.MAX_OUTPUT_TOKENS >= 2000
     assert 0 < config.MAX_DISTANCE < 2
+
+
+def test_chunking_targets_the_specified_token_budget():
+    """The brief asks for ~400 tokens with ~50 overlap; the chunker counts
+    words. Guard the conversion so a future edit to one doesn't silently
+    desync it from the other."""
+    assert config.CHUNK_SIZE == int(config.CHUNK_TOKENS / config.TOKENS_PER_WORD)
+    assert config.CHUNK_OVERLAP == int(
+        config.CHUNK_OVERLAP_TOKENS / config.TOKENS_PER_WORD
+    )
+    assert 250 <= config.CHUNK_SIZE <= 350
+
+
+def test_top_k_matches_the_brief():
+    assert config.TOP_K == 5
+
+
+def test_every_provider_has_a_calibrated_threshold():
+    """A provider with no entry would silently fall back to another one's
+    number, and the refusal boundary would be wrong without saying so."""
+    for provider in ("local", "openai"):
+        assert 0 < config.MAX_DISTANCE_BY_PROVIDER[provider] < 2
+
+
+# --------------------------------------------------------------------------
+# Seller scoping -- one seller's question must never retrieve another's data
+# --------------------------------------------------------------------------
+
+def test_where_clause_without_a_seller_is_unfiltered():
+    assert FiverrBrain._where() is None
+    assert FiverrBrain._where("sops") == {"layer": "sops"}
+
+
+def test_seller_filter_still_admits_the_shared_layers():
+    """Policies and SOPs belong to the business, not to one seller. Excluding
+    them would make 'what is the refund policy?' unanswerable as soon as a
+    seller is selected."""
+    where = FiverrBrain._where(None, "ali")
+    assert where == {"sellerId": {"$in": ["ali", config.SHARED_SELLER_ID]}}
+
+
+def test_layer_and_seller_filters_combine():
+    where = FiverrBrain._where("profile_gigs", "ali")
+    assert where == {"$and": [
+        {"layer": "profile_gigs"},
+        {"sellerId": {"$in": ["ali", config.SHARED_SELLER_ID]}},
+    ]}
+
+
+def test_seller_isolation_end_to_end(brain, monkeypatch):
+    """Seller A's question must never retrieve seller B's chunks."""
+    from src import ingest as ingest_mod
+    from src.schema import About, BasicInfo, Gig, SellerProfile
+
+    def profile_for(seller_id, subject):
+        return SellerProfile(
+            seller_id=seller_id,
+            basic=BasicInfo(name=seller_id, username=seller_id),
+            about=About(bio=f"I am {seller_id} and I specialise in {subject}."),
+            gigs=[Gig(title=f"I will build {subject} systems",
+                      description=f"Bespoke {subject} work, delivered fast.")],
+        )
+
+    alice = profile_for("alice_iso_test", "underwater basket weaving")
+    bob = profile_for("bob_iso_test", "medieval falconry equipment")
+
+    try:
+        ingest_mod.upsert_seller(alice)
+        ingest_mod.upsert_seller(bob)
+        brain.refresh_collection()
+
+        chunks = brain.retrieve("tell me about basket weaving",
+                                seller_id="bob_iso_test")
+        assert all(m["sellerId"] in ("bob_iso_test", config.SHARED_SELLER_ID)
+                   for _, m in chunks), "another seller's chunks leaked through"
+
+        own = brain.retrieve("tell me about falconry equipment",
+                             seller_id="bob_iso_test")
+        assert own, "a seller must still retrieve their own content"
+    finally:
+        ingest_mod.delete_seller_vectors("alice_iso_test")
+        ingest_mod.delete_seller_vectors("bob_iso_test")
+        brain.refresh_collection()
+
+
+def test_reonboarding_replaces_rather_than_duplicates(brain):
+    """Point 4 of the brief. Saving the same seller twice must not leave the
+    first version's chunks behind answering from deleted content."""
+    from src import ingest as ingest_mod
+    from src.schema import About, BasicInfo, SellerProfile
+
+    seller_id = "dupe_test_seller"
+
+    def profile(bio):
+        return SellerProfile(
+            seller_id=seller_id,
+            basic=BasicInfo(name="Dupe Test", username=seller_id),
+            about=About(bio=bio),
+        )
+
+    try:
+        ingest_mod.upsert_seller(profile("I write technical documentation."))
+        first = brain.client.get_collection(config.COLLECTION_NAME).get(
+            where={"sellerId": seller_id}
+        )
+        ingest_mod.upsert_seller(profile("I now record audiobooks instead."))
+        second = brain.client.get_collection(config.COLLECTION_NAME).get(
+            where={"sellerId": seller_id}
+        )
+
+        assert first["documents"] and second["documents"]
+        joined = " ".join(second["documents"])
+        assert "audiobooks" in joined
+        assert "technical documentation" not in joined
+    finally:
+        ingest_mod.delete_seller_vectors(seller_id)
+        brain.refresh_collection()
+
+
+# --------------------------------------------------------------------------
+# Citations
+# --------------------------------------------------------------------------
+
+def test_ask_returns_the_source_chunks_not_just_filenames(brain):
+    """The brief asks for the chunks alongside the answer so the UI can show
+    citations. Filenames alone say which file, never which sentence."""
+    result = brain.ask("How much is the n8n gig?")
+    assert result["citations"]
+    first = result["citations"][0]
+    assert set(first) >= {"text", "source", "sectionType", "sellerId",
+                          "gigId", "sourceType"}
+    assert first["text"].strip()
+
+
+def test_citations_of_survives_metadata_from_an_older_index():
+    """An index built before the metadata change has no sellerId. Rendering
+    citations for it must degrade, not crash."""
+    chunks = [("some text", {"source": "old.md"})]
+    got = citations_of(chunks)[0]
+    assert got["source"] == "old.md"
+    assert got["sellerId"] == "unknown"

@@ -6,7 +6,7 @@ save the result back into the knowledge base (Layer 1) for reindexing.
 from pathlib import Path
 
 from .. import config
-from ..rag import context_of, sources_of
+from ..rag import citations_of, context_of, sources_of
 
 
 NEW_GIG_INSTRUCTIONS = """You are drafting a NEW Fiverr gig listing for this seller,
@@ -16,9 +16,9 @@ a "how it works" section if relevant, and a suggested category.
 Do not invent pricing -- ask the user for pricing tiers if not provided."""
 
 
-def run(brain, brief: str):
+def run(brain, brief: str, seller_id: str = None):
     """brief: short description of the new gig idea from the user."""
-    chunks = brain.retrieve(brief, layer_filter="profile_gigs")
+    chunks = brain.retrieve(brief, layer_filter="profile_gigs", seller_id=seller_id)
     context = context_of(
         chunks,
         fallback="(No existing gigs indexed yet — use a clean, professional Fiverr tone.)",
@@ -36,6 +36,7 @@ def run(brain, brief: str):
         "answer": answer,
         "sources": sources_of(chunks),
         "chunks_used": len(chunks),
+        "citations": citations_of(chunks),
     }
 
 

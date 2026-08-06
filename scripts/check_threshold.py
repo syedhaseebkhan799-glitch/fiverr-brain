@@ -39,10 +39,10 @@ SHOULD_NOT_MATCH = [
 
 
 def nearest(brain, question, layer):
-    raw = brain.embed_model.encode([question])
-    emb = raw.tolist() if hasattr(raw, "tolist") else list(raw)
+    from src.rag import embed
+
     res = brain.collection.query(
-        query_embeddings=emb,
+        query_embeddings=embed([question]),
         n_results=config.TOP_K,
         where={"layer": layer} if layer else None,
         include=["distances"],
@@ -54,7 +54,14 @@ def nearest(brain, question, layer):
 def main():
     brain = FiverrBrain()
     print(f"Collection holds {brain.collection.count()} chunks.")
-    print(f"Current MAX_DISTANCE = {config.MAX_DISTANCE}\n")
+    print(f"Embedding provider   : {config.EMBEDDING_PROVIDER}")
+    print(f"Embedding model      : {config.EMBEDDING_MODEL}")
+    print(f"Current MAX_DISTANCE : {config.MAX_DISTANCE}"
+          + ("  (ESTIMATE — this run is what replaces it)"
+             if config.MAX_DISTANCE_IS_ESTIMATED else "  (measured)"))
+    if config.EMBEDDING_PROVIDER == "openai":
+        print("Note: this makes one paid embedding call per question below.")
+    print()
 
     worst_match, best_nonmatch = 0.0, 99.0
     problems = []
@@ -82,7 +89,10 @@ def main():
     print(f"Furthest real match : {worst_match:.3f}")
     print(f"Closest off-topic   : {best_nonmatch:.3f}")
     if best_nonmatch > worst_match:
-        print(f"Suggested MAX_DISTANCE: {(worst_match + best_nonmatch) / 2:.2f}")
+        suggested = (worst_match + best_nonmatch) / 2
+        print(f"Suggested MAX_DISTANCE: {suggested:.2f}")
+        print(f"\nPut this in your .env to make it stick:\n"
+              f"    MAX_DISTANCE={suggested:.2f}")
     else:
         print("No clean gap -- the groups overlap. Add clearer KB content.")
 

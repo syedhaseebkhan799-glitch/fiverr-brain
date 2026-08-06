@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .. import config
-from ..rag import context_of, sources_of
+from ..rag import citations_of, context_of, sources_of
 
 ONBOARDING_STEPS = [
     "sop_order_handling",
@@ -75,6 +75,7 @@ def run(brain, trainee: str, question: str):
             ),
             "sources": [],
             "chunks_used": 0,
+            "citations": [],
         }
 
     context = context_of(chunks)
@@ -91,4 +92,5 @@ def run(brain, trainee: str, question: str):
         "answer": answer,
         "sources": sources_of(chunks),
         "chunks_used": len(chunks),
+        "citations": citations_of(chunks),
     }

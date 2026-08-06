@@ -1,7 +1,17 @@
 """
-Ingestion pipeline: reads KB markdown files, chunks them, embeds locally
-with sentence-transformers, and stores in a local ChromaDB collection.
-No external API calls needed for this step -- fully free and offline.
+Ingestion pipeline. Two entry points, both writing to the same collection:
+
+  build_index()   -- full rebuild. Reads every KB markdown file AND every
+                     seller in the store, embeds the lot, and swaps the
+                     collection. Use after editing kb/ by hand.
+  upsert_seller() -- incremental. Replaces exactly one seller's vectors and
+                     touches nothing else. This is what the wizard and the OCR
+                     import call, and it is what makes re-onboarding the same
+                     seller replace rather than duplicate.
+
+Chroma has no namespaces, so `sellerId` in the metadata is the namespace. KB
+content that belongs to no single seller (policies, SOPs) is tagged with
+config.SHARED_SELLER_ID so it stays retrievable whichever seller is selected.
 """
 import re
 import shutil
@@ -10,7 +20,7 @@ from pathlib import Path
 
 import chromadb
 
-from . import config
+from . import config, documents
 
 
 def parse_frontmatter(text: str):
@@ -65,6 +75,10 @@ def load_kb_files(warn=None):
             continue
         for path in sorted(folder.iterdir()):
             if not path.is_file():
+                continue
+            if path.name.endswith(".md.imported"):
+                # Migrated into the store by scripts/migrate_kb_to_store.py and
+                # now indexed from there. Kept on disk, deliberately silent.
                 continue
             if path.suffix.lower() != ".md":
                 warn(f"Ignored (not a .md file): {path.name}")
@@ -148,6 +162,106 @@ def build_index(verbose: bool = True, warn=None):
         _REBUILD_LOCK.release()
 
 
+# Bumped when the metadata written onto each chunk changes in a way that
+# retrieval depends on. Version 2 added sellerId/sectionType/gigId/sourceType;
+# a version 1 index has no sellerId, so a seller-filtered query against it
+# matches nothing at all rather than degrading gracefully.
+SCHEMA_VERSION = 2
+
+
+def _index_metadata() -> dict:
+    """Stamped onto the collection so a mismatch can be detected.
+
+    Querying an index built by a *different* embedding model returns silent
+    nonsense rather than a dimension error whenever the two happen to share a
+    width, so the model and provider are recorded and checked on load.
+    """
+    return {
+        "embedding_model": config.EMBEDDING_MODEL,
+        "embedding_provider": config.EMBEDDING_PROVIDER,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
+def _get_collection(client):
+    """The live collection, created with the model stamp if it is missing."""
+    try:
+        return client.get_collection(config.COLLECTION_NAME)
+    except Exception:
+        return client.create_collection(
+            config.COLLECTION_NAME, metadata=_index_metadata()
+        )
+
+
+def _chunk_documents(docs):
+    """(chunks, metadatas, ids) for a list of documents from documents.py."""
+    chunks, metas, ids = [], [], []
+    for doc in docs:
+        for i, chunk in enumerate(chunk_text(doc["text"])):
+            chunks.append(chunk)
+            metas.append(dict(doc["metadata"]))
+            ids.append(f"{doc['id']}_{i}")
+    return chunks, metas, ids
+
+
+def _kb_file_records(warn):
+    """(chunks, metadatas, ids) for the hand-written markdown layers."""
+    chunks, metas, ids = [], [], []
+    files = load_kb_files(warn=warn)
+
+    kept = []
+    for path, layer, raw_text in files:
+        meta, body = parse_frontmatter(raw_text)
+
+        # Skip the wizard's own markdown export. It is generated from the
+        # profile database, so indexing it too would store every seller twice
+        # -- once correctly under their sellerId, and once as shared KB content
+        # visible to every other seller, which defeats the whole point of the
+        # per-seller filter.
+        if meta.get("type") == "profile_export":
+            continue
+        kept.append(path)
+
+        file_chunks = chunk_text(body)
+        if not file_chunks:
+            warn(f"{path.name} has no body content after frontmatter, skipped.")
+            continue
+        for i, chunk in enumerate(file_chunks):
+            chunks.append(chunk)
+            metas.append({
+                "source": path.name,
+                "layer": layer,
+                "gig_name": meta.get("gig_name", "N/A"),
+                "category": meta.get("category", "N/A"),
+                # Hand-written KB content is not owned by one seller.
+                "sellerId": config.SHARED_SELLER_ID,
+                "sectionType": layer,
+                "gigId": "N/A",
+                "sourceType": "manual",
+            })
+            # Layer prefix: two files with the same stem in different folders
+            # would otherwise collide and silently overwrite each other.
+            ids.append(f"{layer}__{path.stem}_{i}")
+    return chunks, metas, ids, kept
+
+
+def _seller_records(warn):
+    """(chunks, metadatas, ids) for every seller in the store."""
+    from . import store
+
+    try:
+        profiles = store.load_all_sellers()
+    except Exception as e:
+        warn(f"Could not read stored profiles, indexing KB files only: {e}")
+        return [], [], [], []
+
+    docs = []
+    for profile in profiles:
+        docs.extend(documents.build_documents(profile))
+    chunks, metas, ids = _chunk_documents(docs)
+    return chunks, metas, ids, profiles
+
+
 def _build_index(verbose: bool = True, warn=None):
     """Full pipeline: load -> chunk -> embed -> store in ChromaDB.
 
@@ -155,7 +269,7 @@ def _build_index(verbose: bool = True, warn=None):
     computed successfully, so a failure part-way through leaves the live index
     intact instead of wiping it.
     """
-    from .rag import get_embed_model
+    from .rag import embed
 
     warnings = []
 
@@ -166,52 +280,33 @@ def _build_index(verbose: bool = True, warn=None):
         if warn:
             warn(msg)
 
-    model = get_embed_model()
+    file_chunks, file_metas, file_ids, files = _kb_file_records(_warn)
+    seller_chunks, seller_metas, seller_ids, profiles = _seller_records(_warn)
 
-    all_chunks, all_metas, all_ids = [], [], []
-    files = load_kb_files(warn=_warn)
+    all_chunks = file_chunks + seller_chunks
+    all_metas = file_metas + seller_metas
+    all_ids = file_ids + seller_ids
 
-    for path, layer, raw_text in files:
-        meta, body = parse_frontmatter(raw_text)
-        chunks = chunk_text(body)
-        if not chunks:
-            _warn(f"{path.name} has no body content after frontmatter, skipped.")
-            continue
-        for i, chunk in enumerate(chunks):
-            all_chunks.append(chunk)
-            all_metas.append({
-                "source": path.name,
-                "layer": layer,
-                "gig_name": meta.get("gig_name", "N/A"),
-                "category": meta.get("category", "N/A"),
-            })
-            # Layer prefix: two files with the same stem in different folders
-            # would otherwise collide and silently overwrite each other.
-            all_ids.append(f"{layer}__{path.stem}_{i}")
-        if verbose:
-            print(f"  chunked {path.name} -> {len(chunks)} chunk(s)")
+    if verbose:
+        print(f"  {len(files)} KB file(s) -> {len(file_chunks)} chunk(s)")
+        print(f"  {len(profiles)} stored profile(s) -> {len(seller_chunks)} chunk(s)")
 
     if not all_chunks:
-        _warn("No KB content found -- add .md files under kb/ first. "
-              "Existing index left untouched.")
+        _warn("No KB content found -- add .md files under kb/ or complete "
+              "profile onboarding first. Existing index left untouched.")
         return 0
 
     # Embed BEFORE touching the live collection -- this is the step most
-    # likely to fail (OOM, model download), and we want it to fail safely.
-    raw_embeddings = model.encode(all_chunks, show_progress_bar=verbose)
-    embeddings = raw_embeddings.tolist() if hasattr(raw_embeddings, "tolist") else list(raw_embeddings)
+    # likely to fail (OOM, model download, API error), and it must fail safely.
+    embeddings = embed(all_chunks)
 
     client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
     try:
         client.delete_collection(config.COLLECTION_NAME)
     except Exception:
         pass
-    # Stamp the model in. Querying an index built by a *different* embedding
-    # model returns silent nonsense (both MiniLM variants are 384-dim, so
-    # there is no dimension error to catch it) -- rag.py checks this on load.
     collection = client.create_collection(
-        config.COLLECTION_NAME,
-        metadata={"embedding_model": config.EMBEDDING_MODEL},
+        config.COLLECTION_NAME, metadata=_index_metadata()
     )
 
     collection.add(
@@ -224,10 +319,72 @@ def _build_index(verbose: bool = True, warn=None):
     _prune_orphan_segments(_warn)
 
     if verbose:
-        print(f"Indexed {len(all_chunks)} chunks from {len(files)} file(s).")
+        print(f"Indexed {len(all_chunks)} chunks.")
         if warnings:
             print(f"Completed with {len(warnings)} warning(s).")
     return len(all_chunks)
+
+
+def delete_seller_vectors(seller_id: str) -> None:
+    """Drop every chunk belonging to one seller."""
+    client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
+    try:
+        collection = client.get_collection(config.COLLECTION_NAME)
+    except Exception:
+        return  # nothing indexed yet
+    collection.delete(where={"sellerId": seller_id})
+
+
+def upsert_seller(profile, verbose: bool = False, warn=None) -> int:
+    """Replace one seller's vectors. Everything else is left untouched.
+
+    Serialised behind the same lock as a full rebuild: an upsert landing
+    halfway through `create_collection` would write into a collection that is
+    about to be replaced, and the seller's data would vanish.
+    """
+    if not _REBUILD_LOCK.acquire(blocking=False):
+        raise RebuildInProgress(
+            "A rebuild is already running. Wait for it to finish and try again."
+        )
+    try:
+        return _upsert_seller(profile, verbose=verbose, warn=warn)
+    finally:
+        _REBUILD_LOCK.release()
+
+
+def _upsert_seller(profile, verbose: bool = False, warn=None) -> int:
+    from .rag import embed
+
+    warn = warn or (lambda msg: None)
+    seller_id = profile.resolved_seller_id()
+
+    chunks, metas, ids = _chunk_documents(documents.build_documents(profile))
+
+    # Embed first. If this fails the seller's existing vectors are still there,
+    # which is the same guarantee a full rebuild gives.
+    embeddings = embed(chunks) if chunks else []
+
+    client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
+    collection = _get_collection(client)
+
+    # Delete-then-add rather than Chroma's upsert: chunk ids depend on how the
+    # text splits, so a profile that got shorter would leave the tail of the
+    # previous version behind and answer questions from deleted content.
+    collection.delete(where={"sellerId": seller_id})
+
+    if not chunks:
+        warn(
+            "Nothing to index for this seller yet — the profile has no bio, "
+            "gigs, portfolio or reviews with any content in them."
+        )
+        return 0
+
+    collection.add(
+        documents=chunks, embeddings=embeddings, metadatas=metas, ids=ids
+    )
+    if verbose:
+        print(f"Indexed {len(chunks)} chunk(s) for {seller_id}.")
+    return len(chunks)
 
 
 if __name__ == "__main__":

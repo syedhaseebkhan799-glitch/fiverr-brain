@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 from openai import (
     OpenAI,
     APIConnectionError,
@@ -40,6 +39,27 @@ def sources_of(chunks) -> list:
     return sorted({Path(meta.get("source", "unknown")).name for _, meta in chunks})
 
 
+def citations_of(chunks) -> list:
+    """The retrieved chunks themselves, shaped for the UI.
+
+    `sources_of` returns filenames, which tell a reader which document an
+    answer came from but not which sentence. Citations carry the text so the
+    seller can check the answer against what the KB actually says.
+    """
+    return [
+        {
+            "text": doc,
+            "source": Path(meta.get("source", "unknown")).name,
+            "sectionType": meta.get("sectionType", "unknown"),
+            "sellerId": meta.get("sellerId", "unknown"),
+            "gigId": meta.get("gigId", "N/A"),
+            "sourceType": meta.get("sourceType", "manual"),
+            "layer": meta.get("layer", "unknown"),
+        }
+        for doc, meta in chunks
+    ]
+
+
 def context_of(chunks, fallback: str = "") -> str:
     """Join chunks into a labelled context block for a mode prompt."""
     if not chunks:
@@ -66,17 +86,107 @@ def fence(untrusted_text: str, label: str) -> str:
     )
 
 
-# The embedding model is ~90MB of weights plus torch runtime. Loading one per
+class EmbeddingError(RuntimeError):
+    """Raised when embedding fails for a reason the user should see."""
+
+
+class OpenAIEmbedder:
+    """`text-embedding-3-small`, wearing SentenceTransformer's interface.
+
+    Everything downstream calls `.encode(list_of_texts)` and gets a list of
+    vectors back, so neither the ingest pipeline nor retrieval has to know
+    which provider is active. Unlike the local model this one costs money and
+    can fail on the network, so failures are turned into a message a user can
+    act on rather than a raw SDK exception surfacing mid-rebuild.
+    """
+
+    # The endpoint accepts many inputs per call; batching keeps a full reindex
+    # to a handful of round trips instead of one per chunk.
+    BATCH_SIZE = 128
+
+    def __init__(self, model: str, api_key: str):
+        if not api_key:
+            raise EmbeddingError(
+                "EMBEDDING_PROVIDER is 'openai' but OPENAI_API_KEY is not set. "
+                "Add the key, or set EMBEDDING_PROVIDER=local in your .env to "
+                "use the free offline model."
+            )
+        self.model = model
+        self._client = OpenAI(api_key=api_key, timeout=60.0)
+
+    def encode(self, texts, show_progress_bar: bool = False, **_):
+        if isinstance(texts, str):
+            texts = [texts]
+        texts = [t if str(t).strip() else " " for t in texts]
+
+        vectors = []
+        for start in range(0, len(texts), self.BATCH_SIZE):
+            batch = texts[start:start + self.BATCH_SIZE]
+            try:
+                response = self._client.embeddings.create(
+                    model=self.model, input=batch
+                )
+            except AuthenticationError:
+                raise EmbeddingError(
+                    "Your OpenAI API key was rejected while embedding. Check "
+                    "OPENAI_API_KEY in your .env file / Streamlit Secrets."
+                )
+            except RateLimitError:
+                raise EmbeddingError(
+                    "OpenAI rate limit or quota hit while embedding. Wait and "
+                    "retry, or check billing at platform.openai.com/usage."
+                )
+            except APITimeoutError:
+                raise EmbeddingError("OpenAI timed out while embedding. Retry.")
+            except APIConnectionError:
+                raise EmbeddingError(
+                    "Could not reach OpenAI to embed. Check your connection."
+                )
+            except APIError as e:
+                raise EmbeddingError(f"OpenAI returned an error while embedding: {e}")
+
+            vectors.extend(item.embedding for item in response.data)
+            if show_progress_bar:
+                print(f"  embedded {min(start + self.BATCH_SIZE, len(texts))}"
+                      f"/{len(texts)}")
+        return vectors
+
+
+# The local model is ~90MB of weights plus torch runtime. Loading one per
 # Streamlit session blows past the 1GB container limit with only a few users,
-# so every caller shares a single process-wide instance.
+# so every caller shares a single process-wide instance. The OpenAI adapter is
+# cheap but shares the same slot so the provider can never differ between two
+# callers in one process -- which would silently mix two vector spaces.
 _EMBED_MODEL = None
 
 
 def get_embed_model():
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
-        _EMBED_MODEL = SentenceTransformer(config.EMBEDDING_MODEL)
+        if config.EMBEDDING_PROVIDER == "local":
+            # Imported here, not at module load: it pulls in torch, which costs
+            # seconds of startup the OpenAI path has no reason to pay.
+            from sentence_transformers import SentenceTransformer
+
+            _EMBED_MODEL = SentenceTransformer(config.EMBEDDING_MODEL)
+        else:
+            _EMBED_MODEL = OpenAIEmbedder(
+                config.EMBEDDING_MODEL, config.OPENAI_API_KEY
+            )
     return _EMBED_MODEL
+
+
+def reset_embed_model():
+    """Drop the cached embedder. Only needed when the provider changes
+    mid-process, which in practice means tests."""
+    global _EMBED_MODEL
+    _EMBED_MODEL = None
+
+
+def embed(texts):
+    """One vector per text, always as plain lists Chroma will accept."""
+    raw = get_embed_model().encode(list(texts))
+    return raw.tolist() if hasattr(raw, "tolist") else [list(v) for v in raw]
 
 
 class LLMError(RuntimeError):
@@ -100,14 +210,15 @@ class FiverrBrain:
     def _check_index_model(self):
         """Warn if the index was built by a different embedding model.
 
-        Every MiniLM variant is 384-dim, so a mismatch raises no dimension
-        error -- queries just quietly match nothing and the bot claims it
-        doesn't know anything. Surface it instead of letting it look like an
+        A mismatch raises no dimension error whenever the two models happen to
+        share a width -- queries just quietly match nothing and the bot claims
+        it doesn't know anything. Surface it instead of letting it look like an
         empty knowledge base.
         """
         try:
             meta = self.collection.metadata or {}
             built_with = meta.get("embedding_model")
+            built_by = meta.get("embedding_provider")
             count = self.collection.count()
         except Exception:
             return None
@@ -122,6 +233,25 @@ class FiverrBrain:
                 f"Index was built with embedding model **{built_with}** but "
                 f"EMBEDDING_MODEL is now **{config.EMBEDDING_MODEL}**. Retrieval "
                 f"will silently return nothing until you rebuild the index."
+            )
+        if built_by and built_by != config.EMBEDDING_PROVIDER:
+            return (
+                f"Index was built by the **{built_by}** embedding provider but "
+                f"EMBEDDING_PROVIDER is now **{config.EMBEDDING_PROVIDER}**. "
+                f"Rebuild the index before trusting any answer."
+            )
+
+        from .ingest import SCHEMA_VERSION
+
+        if meta.get("schema_version", 1) < SCHEMA_VERSION:
+            # Chunks in an older index carry no sellerId, and a `where` clause
+            # cannot match a key that is not there -- so once a seller exists,
+            # every filtered question would come back "I don't know".
+            return (
+                "The index predates per-seller retrieval and has no `sellerId` "
+                "on its chunks. Run `python scripts/reindex.py` (or use Rebuild "
+                "index in the sidebar) — until then, answers scoped to a seller "
+                "will find nothing."
             )
         return None
 
@@ -187,16 +317,37 @@ class FiverrBrain:
             return False
         return bool(_FOLLOWUP_RE.search(question))
 
-    def _search(self, search_text: str, top_k: int, layer_filter: str):
+    @staticmethod
+    def _where(layer_filter: str = None, seller_id: str = None):
+        """Chroma `where` clause for a layer and/or a seller.
+
+        A seller filter has to admit the shared layers too. Policies and SOPs
+        belong to the business, not to one seller, and excluding them would
+        make "what is the refund policy?" unanswerable the moment a seller is
+        selected.
+        """
+        clauses = []
+        if layer_filter:
+            clauses.append({"layer": layer_filter})
+        if seller_id:
+            clauses.append({"sellerId": {"$in": [seller_id, config.SHARED_SELLER_ID]}})
+
+        if not clauses:
+            return None
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$and": clauses}
+
+    def _search(self, search_text: str, top_k: int, layer_filter: str,
+                seller_id: str = None):
         """One vector query, filtered by the relevance threshold.
 
         Chroma always returns the n nearest chunks, however far away they are.
-        Without a distance cut-off an off-topic question still retrieves four
+        Without a distance cut-off an off-topic question still retrieves five
         chunks, so nothing is ever recorded as unanswered.
         """
-        raw = self.embed_model.encode([search_text])
-        query_embedding = raw.tolist() if hasattr(raw, "tolist") else list(raw)
-        where = {"layer": layer_filter} if layer_filter else None
+        query_embedding = embed([search_text])
+        where = self._where(layer_filter, seller_id)
 
         def _query():
             return self.collection.query(
@@ -232,6 +383,7 @@ class FiverrBrain:
         top_k: int = None,
         layer_filter: str = None,
         use_history: bool = False,
+        seller_id: str = None,
     ):
         """Retrieve relevant chunks, resolving follow-up questions if needed.
 
@@ -242,7 +394,7 @@ class FiverrBrain:
         """
         top_k = top_k or config.TOP_K
 
-        chunks = self._search(question, top_k, layer_filter)
+        chunks = self._search(question, top_k, layer_filter, seller_id)
         if chunks or not use_history:
             return chunks
 
@@ -254,7 +406,7 @@ class FiverrBrain:
             return chunks
 
         # Referential follow-up -- resolve it against the previous question.
-        return self._search(f"{prior}\n{question}", top_k, layer_filter)
+        return self._search(f"{prior}\n{question}", top_k, layer_filter, seller_id)
 
     def _build_prompt(self, question: str, chunks):
         if not chunks:
@@ -280,8 +432,11 @@ class FiverrBrain:
         )
         return prompt
 
-    def ask(self, question: str, layer_filter: str = None):
-        chunks = self.retrieve(question, layer_filter=layer_filter, use_history=True)
+    def ask(self, question: str, layer_filter: str = None, seller_id: str = None):
+        chunks = self.retrieve(
+            question, layer_filter=layer_filter, use_history=True,
+            seller_id=seller_id,
+        )
         prompt = self._build_prompt(question, chunks)
         answer = self._call_llm(prompt)
 
@@ -290,6 +445,7 @@ class FiverrBrain:
             "answer": answer,
             "sources": sources_of(chunks),
             "chunks_used": len(chunks),
+            "citations": citations_of(chunks),
         }
 
     def remember(self, user_text: str, assistant_text: str):

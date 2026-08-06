@@ -5,3 +5,11 @@ chromadb==1.5.9
 sentence-transformers==5.6.1
 openai==2.50.0
 python-dotenv==1.2.2
+
+# Both of these were already installed as transitive dependencies (pydantic via
+# chromadb, Pillow via streamlit). They are declared now because the app
+# depends on them directly and load-bearingly: pydantic is the shared schema,
+# Pillow validates uploads and strips EXIF. An upstream change that dropped
+# either would otherwise break the app with no obvious cause.
+pydantic==2.13.4
+Pillow==12.3.0
