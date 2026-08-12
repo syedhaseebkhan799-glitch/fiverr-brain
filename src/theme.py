@@ -1,18 +1,34 @@
 """
-The Silverthread Labs Hub look, applied to Streamlit.
+The Silverthread Labs Hub look, applied to Streamlit -- in dark and in light.
 
-Everything visual lives here, and every colour lives in `PALETTE` -- one dict,
-one edit, whole app changes. Nothing in this module knows what a gig or a
-seller is, so restyling can never break behaviour.
+Everything visual lives here, and every colour lives in `PALETTES`: two dicts
+with identical keys, one per appearance. Nothing else in the app names a colour,
+so `mode()` is the only switch there is and restyling can never break
+behaviour.
 
-Streamlit gives no theming API beyond four colours in `config.toml`, so the
-rest is CSS against Streamlit's own DOM. That DOM is not a public contract, so
-every selector here is written to fail *soft*: if a future Streamlit release
-renames something, the rule stops applying and the widget falls back to its
-default appearance. Nothing here is load-bearing for using the app -- which is
-why, for instance, the nav's radio dots are hidden by matching the element that
-actually contains the `input` rather than by guessing at child order. A browser
-without `:has()` shows the dots; a wrong guess would have hidden the labels.
+A theme is painted in two layers, and they are kept in step by hand:
+
+*   `.streamlit/config.toml` paints what Streamlit draws for itself and this
+    module never reaches -- dropdown popovers, alert tints, code blocks, the
+    focus rings. It holds the light palette under `[theme]` and the dark one
+    under `[theme.dark]`, and the *browser* chooses between them from the
+    reader's system preference.
+*   This module paints everything else, keyed off `mode()`.
+
+On a fresh visit the two layers agree, because `mode()` starts from
+`st.context.theme.type` -- which appearance Streamlit actually rendered. If the
+reader then flips the in-app switch, this module has to win the disagreement on
+its own, which is why the handful of rules that fight a Streamlit-set colour
+carry `!important`. Everywhere else the cascade is left alone.
+
+Streamlit's DOM is not a public contract, so every selector here is written to
+fail *soft*: if a future release renames something, the rule stops applying and
+the widget falls back to its own theme's appearance -- which is still readable,
+because config.toml gave that theme the same colours. Nothing here is
+load-bearing for using the app -- which is why, for instance, the nav's radio
+dots are hidden by matching the element that actually contains the `input`
+rather than by guessing at child order. A browser without `:has()` shows the
+dots; a wrong guess would have hidden the labels.
 
 The one rule that is *not* safe to broaden is the font. Streamlit renders its
 chevrons as Material icon ligatures, so a font-family applied widely enough to
@@ -22,25 +38,90 @@ font is pinned back by name.
 """
 import streamlit as st
 
-# --- The palette, read off the Hub ------------------------------------------
+# --- The palettes, read off the Hub -----------------------------------------
+#
+# Both dicts carry the same keys, and `_css` reads them by name only, so a new
+# colour has to be added to both or the app fails loudly at import-time-ish
+# (the first `KeyError` on a rerun) rather than silently rendering one theme
+# with a hole in it. `_check_palettes` below makes that failure immediate.
+#
+# The light palette is not the dark one inverted. Depth is inverted instead: a
+# dark page lifts panels *towards* the light, a light page seats them on a
+# faintly grey ground and keeps the panels white. Green also darkens, because
+# the Hub's #22C55E is a 1.8:1 contrast against white and unreadable as text.
 
-PALETTE = {
-    "bg": "#0A0A0A",           # page
-    "sidebar": "#0C0C0C",      # nav rail, separated from the page by a border
-    "card": "#0E0E0E",         # panels, barely lifted off the page
-    "raised": "#141414",       # hover states and inputs
-    "border": "#1F1F1F",       # the thin lines that define every panel
-    "hairline": "#171717",     # internal dividers, quieter than a border
+DARK = {
+    "scheme": "dark",           # CSS color-scheme: native scrollbars, controls
+    "bg": "#0A0A0A",            # page
+    "sidebar": "#0C0C0C",       # nav rail, separated from the page by a border
+    "card": "#0E0E0E",          # panels, barely lifted off the page
+    "raised": "#141414",        # hover states and inputs
+    "code": "#141414",          # preformatted blocks
+    "border": "#1F1F1F",        # the thin lines that define every panel
+    "hairline": "#171717",      # internal dividers, quieter than a border
     "text": "#EDEDED",
     "muted": "#8A8A8A",
-    "accent": "#22C55E",       # the Hub's green: active nav, positives, focus
+    "shadow": "none",           # a dark page has no light to cast one
+    "accent": "#22C55E",        # the Hub's green: active nav, positives, focus
     "accent_soft": "rgba(34, 197, 94, 0.10)",
-    "accent_ink": "#06180E",   # text on a filled green button
+    "accent_line": "rgba(34, 197, 94, 0.30)",
+    "accent_ink": "#06180E",    # text on a filled green button
+    "accent_hover": "#1EA855",
     "danger": "#F87171",
     "danger_soft": "rgba(248, 113, 113, 0.10)",
+    "danger_line": "rgba(248, 113, 113, 0.35)",
     "warn": "#EAB308",
     "warn_soft": "rgba(234, 179, 8, 0.10)",
+    "warn_line": "rgba(234, 179, 8, 0.35)",
+    "info": "#60A5FA",
+    "info_soft": "rgba(96, 165, 250, 0.10)",
+    "info_line": "rgba(96, 165, 250, 0.35)",
 }
+
+LIGHT = {
+    "scheme": "light",
+    "bg": "#F7F8F8",
+    "sidebar": "#FCFCFD",
+    "card": "#FFFFFF",
+    "raised": "#F1F2F4",
+    "code": "#F4F5F7",
+    "border": "#E3E5E8",
+    "hairline": "#ECEEF0",
+    "text": "#16181D",
+    "muted": "#5F6875",
+    "shadow": "0 1px 2px rgba(16, 24, 40, 0.04)",
+    "accent": "#15803D",
+    "accent_soft": "rgba(21, 128, 61, 0.08)",
+    "accent_line": "rgba(21, 128, 61, 0.28)",
+    "accent_ink": "#FFFFFF",
+    "accent_hover": "#14532D",
+    "danger": "#B91C1C",
+    "danger_soft": "rgba(185, 28, 28, 0.07)",
+    "danger_line": "rgba(185, 28, 28, 0.26)",
+    "warn": "#92400E",
+    "warn_soft": "rgba(180, 83, 9, 0.08)",
+    "warn_line": "rgba(180, 83, 9, 0.26)",
+    "info": "#1D4ED8",
+    "info_soft": "rgba(29, 78, 216, 0.07)",
+    "info_line": "rgba(29, 78, 216, 0.24)",
+}
+
+PALETTES = {"dark": DARK, "light": LIGHT}
+MODES = ("dark", "light")
+DEFAULT_MODE = "dark"
+
+
+def _check_palettes():
+    """Fail on a half-added colour rather than shipping one broken theme."""
+    missing = set(DARK) ^ set(LIGHT)
+    if missing:
+        raise RuntimeError(
+            "theme.DARK and theme.LIGHT must carry the same keys; these are in "
+            f"one but not the other: {sorted(missing)}"
+        )
+
+
+_check_palettes()
 
 # Segoe UI on Windows, San Francisco on a Mac -- the Hub's screenshot is Segoe,
 # and a system stack matches it without shipping a webfont the app would then
@@ -51,34 +132,140 @@ FONT_STACK = (
 )
 DISPLAY_STACK = 'Georgia, "Times New Roman", serif'
 
+# The switch's state. It is the widget's own key, so Streamlit keeps it across
+# reruns and the callback below only has to mirror it into the URL.
+_KEY = "stl_theme_light"
+_QUERY_KEY = "theme"
 _INJECTED = "_stl_theme_injected"
 
 
-def _css() -> str:
-    p = PALETTE
+# --- Which appearance are we in? --------------------------------------------
+
+def _detected() -> str:
+    """
+    The appearance to start a session in, most deliberate signal first: a
+    `?theme=` in the URL (a reader's own choice, surviving a refresh), then
+    what Streamlit rendered for the reader's system preference, then dark.
+
+    `st.context` needs a live script run, so this is wrapped: importing the
+    module or calling it from a test must not raise.
+    """
+    try:
+        wanted = str(st.query_params.get(_QUERY_KEY, "")).lower()
+        if wanted in MODES:
+            return wanted
+    except Exception:
+        pass
+
+    try:
+        # Documented as unreliable in the rerun *during* a theme change, which
+        # is exactly why it is only ever read to seed the switch and never on
+        # every rerun: once the switch exists, the switch is the truth.
+        reported = st.context.theme.type
+        if reported in MODES:
+            return reported
+    except Exception:
+        pass
+
+    return DEFAULT_MODE
+
+
+def mode() -> str:
+    """The active appearance: `"dark"` or `"light"`. Never anything else."""
+    if _KEY not in st.session_state:
+        st.session_state[_KEY] = _detected() == "light"
+    return "light" if st.session_state[_KEY] else "dark"
+
+
+def palette() -> dict:
+    """The active palette. Handy for anything that needs a colour in Python."""
+    return PALETTES[mode()]
+
+
+def _remember():
+    """
+    Mirror the switch into the URL so a refresh keeps the reader's choice.
+
+    Runs as the switch's `on_change`, where `st.session_state[_KEY]` is already
+    the new value. Query params are cosmetic here, so a failure to write one is
+    swallowed: the theme still applies, it just would not survive a reload.
+    """
+    try:
+        st.query_params[_QUERY_KEY] = mode()
+    except Exception:
+        pass
+
+
+def switch(label_visibility: str = "visible"):
+    """
+    The appearance switch, for the rail.
+
+    A toggle rather than a two-chip control on purpose: a toggle cannot be
+    empty, so there is no "neither" state to interpret, and it is not a
+    `radiogroup` -- which the nav rules below claim wholesale.
+    """
+    on = mode() == "light"   # also seeds `_KEY` on the first run
+    st.toggle(
+        ":material/light_mode: Light mode" if on else ":material/dark_mode: Dark mode",
+        key=_KEY,
+        on_change=_remember,
+        help="Switch between the light and dark appearance.",
+        label_visibility=label_visibility,
+    )
+
+
+# --- The stylesheet ----------------------------------------------------------
+
+def _css(p: dict) -> str:
     return f"""
 <style>
 :root {{
+  color-scheme: {p['scheme']};
   --stl-bg: {p['bg']};
   --stl-sidebar: {p['sidebar']};
   --stl-card: {p['card']};
   --stl-raised: {p['raised']};
+  --stl-code: {p['code']};
   --stl-border: {p['border']};
   --stl-hairline: {p['hairline']};
   --stl-text: {p['text']};
   --stl-muted: {p['muted']};
+  --stl-shadow: {p['shadow']};
   --stl-accent: {p['accent']};
   --stl-accent-soft: {p['accent_soft']};
+  --stl-accent-line: {p['accent_line']};
+  --stl-accent-ink: {p['accent_ink']};
+  --stl-accent-hover: {p['accent_hover']};
   --stl-danger: {p['danger']};
   --stl-danger-soft: {p['danger_soft']};
+  --stl-danger-line: {p['danger_line']};
   --stl-warn: {p['warn']};
   --stl-warn-soft: {p['warn_soft']};
+  --stl-warn-line: {p['warn_line']};
+  --stl-info: {p['info']};
+  --stl-info-soft: {p['info_soft']};
+  --stl-info-line: {p['info_line']};
 }}
 
-/* --- Page shell --------------------------------------------------------- */
+/* --- Page shell ---------------------------------------------------------
+   The surfaces are `!important` because Streamlit paints them from its own
+   theme, and that theme follows the system preference rather than the switch
+   in the rail. Without this, flipping to light on a dark desktop would leave
+   the page black under light panels. */
 
 html, body, .stApp {{ font-family: {FONT_STACK}; }}
-.stApp {{ background: var(--stl-bg); color: var(--stl-text); }}
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"] {{
+  background: var(--stl-bg) !important;
+  color: var(--stl-text);
+}}
+/* The chat input sits in its own bottom bar, painted separately -- and the
+   painted element is the anonymous div inside it, not the bar itself. */
+[data-testid="stBottom"], [data-testid="stBottom"] > div,
+[data-testid="stBottomBlockContainer"] {{
+  background: var(--stl-bg) !important;
+}}
 
 /* Streamlit draws its chevrons and control glyphs as Material *ligatures*:
    the element's text really is "keyboard_arrow_right", and only the icon font
@@ -92,18 +279,67 @@ html, body, .stApp {{ font-family: {FONT_STACK}; }}
    collapse control survives on a phone, but made invisible. */
 [data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stToolbar"] {{ right: 0.5rem; }}
+/* The glyphs carry their own colour, so the icon is named as well as the
+   button -- otherwise the collapse arrow stays near-white on a light page. */
+[data-testid="stToolbar"] button, [data-testid="stToolbar"] [data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stExpandSidebarButton"] button,
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"] {{
+  color: var(--stl-muted) !important;
+}}
 #MainMenu, footer {{ visibility: hidden; }}
 
 .block-container {{ padding-top: 2.2rem; padding-bottom: 4rem; max-width: 1100px; }}
 
-h1, h2, h3, h4 {{ color: var(--stl-text); letter-spacing: -0.01em; }}
-hr {{ border-color: var(--stl-hairline); }}
-a {{ color: var(--stl-accent); }}
+h1, h2, h3, h4, h5, h6 {{ color: var(--stl-text) !important; letter-spacing: -0.01em; }}
+hr, [data-testid="stDivider"] hr {{ border-color: var(--stl-hairline) !important; }}
+a, a:visited {{ color: var(--stl-accent) !important; }}
+
+/* Body copy and widget labels. Captions stay quiet. */
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] strong,
+[data-testid="stWidgetLabel"] p,
+label {{ color: var(--stl-text); }}
+[data-testid="stCaption"], [data-testid="stCaption"] p,
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{
+  color: var(--stl-muted) !important;
+}}
+
+/* Inline code, and the blocks `st.text`/`st.code`/`st.json` draw. */
+[data-testid="stMarkdownContainer"] code,
+[data-testid="stCaptionContainer"] code {{
+  background: var(--stl-raised) !important;
+  color: var(--stl-accent) !important;
+  border: 1px solid var(--stl-border);
+  border-radius: 5px;
+  padding: 0.08em 0.34em;
+}}
+[data-testid="stCode"], [data-testid="stCode"] pre, [data-testid="stCode"] code,
+[data-testid="stText"], [data-testid="stJson"],
+[data-testid="stMarkdownPre"] pre {{
+  background: var(--stl-code) !important;
+  color: var(--stl-text) !important;
+  border-radius: 8px;
+}}
+[data-testid="stText"], [data-testid="stCode"], [data-testid="stJson"] {{
+  border: 1px solid var(--stl-border);
+}}
+
+::-webkit-scrollbar {{ width: 10px; height: 10px; }}
+::-webkit-scrollbar-track {{ background: transparent; }}
+::-webkit-scrollbar-thumb {{
+  background: var(--stl-border); border-radius: 999px;
+  border: 2px solid var(--stl-bg);
+}}
+::-webkit-scrollbar-thumb:hover {{ background: var(--stl-muted); }}
 
 /* --- Sidebar ------------------------------------------------------------ */
 
 [data-testid="stSidebar"] {{
-  background: var(--stl-sidebar);
+  background: var(--stl-sidebar) !important;
   border-right: 1px solid var(--stl-border);
 }}
 [data-testid="stSidebar"] .block-container {{ padding-top: 1rem; }}
@@ -142,80 +378,245 @@ a {{ color: var(--stl-accent); }}
   font-size: 0.92rem; color: var(--stl-muted);
 }}
 
+/* The appearance switch, sitting where the rail's quiet controls live. */
+.st-key-{_KEY} {{ margin: 2px 0 6px 0; }}
+.st-key-{_KEY} label p {{ font-size: 0.84rem; color: var(--stl-muted); }}
+
 /* --- Panels ------------------------------------------------------------- */
 
 [data-testid="stVerticalBlockBorderWrapper"]:has(> div > [data-testid="stVerticalBlock"]) {{
   border-radius: 10px;
 }}
 [data-testid="stExpander"] details {{
-  background: var(--stl-card);
-  border: 1px solid var(--stl-border);
+  background: var(--stl-card) !important;
+  border: 1px solid var(--stl-border) !important;
   border-radius: 10px;
+  box-shadow: var(--stl-shadow);
 }}
-[data-testid="stExpander"] summary:hover {{ color: var(--stl-accent); }}
+[data-testid="stExpander"] summary {{
+  background: var(--stl-card) !important;
+  color: var(--stl-text) !important;
+}}
+[data-testid="stExpander"] summary:hover,
+[data-testid="stExpander"] summary:hover p {{ color: var(--stl-accent) !important; }}
 
 [data-testid="stMetric"] {{
-  background: var(--stl-card);
+  background: var(--stl-card) !important;
   border: 1px solid var(--stl-border);
   border-radius: 10px;
   padding: 14px 16px;
+  box-shadow: var(--stl-shadow);
 }}
-[data-testid="stMetricValue"] {{ color: var(--stl-accent); font-weight: 600; }}
-[data-testid="stMetricLabel"] p {{ color: var(--stl-muted); }}
+[data-testid="stMetricValue"] {{ color: var(--stl-accent) !important; font-weight: 600; }}
+[data-testid="stMetricLabel"] p {{ color: var(--stl-muted) !important; }}
 
-[data-testid="stAlert"] {{ border-radius: 10px; }}
+/* Alerts. Streamlit tints these from its own theme, so the tint is re-stated
+   here in the switch's colours. The *kind* is only visible in the DOM on the
+   inner content node, hence `:has()` -- and a browser without it simply keeps
+   Streamlit's tint, which config.toml already matched to these palettes. */
+[data-testid="stAlertContainer"] {{
+  background: var(--stl-card) !important;
+  border: 1px solid var(--stl-border) !important;
+  border-left: 3px solid var(--stl-muted) !important;
+  border-radius: 10px !important;
+  color: var(--stl-text) !important;
+}}
+[data-testid="stAlertContainer"] p,
+[data-testid="stAlertContainer"] li,
+[data-testid="stAlertContainer"] code {{ color: var(--stl-text) !important; }}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {{
+  background: var(--stl-accent-soft) !important;
+  border-color: var(--stl-accent-line) !important;
+  border-left-color: var(--stl-accent) !important;
+}}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {{
+  background: var(--stl-warn-soft) !important;
+  border-color: var(--stl-warn-line) !important;
+  border-left-color: var(--stl-warn) !important;
+}}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {{
+  background: var(--stl-danger-soft) !important;
+  border-color: var(--stl-danger-line) !important;
+  border-left-color: var(--stl-danger) !important;
+}}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]) {{
+  background: var(--stl-info-soft) !important;
+  border-color: var(--stl-info-line) !important;
+  border-left-color: var(--stl-info) !important;
+}}
+[data-testid="stAlertContentSuccess"] [data-testid="stIconMaterial"] {{ color: var(--stl-accent) !important; }}
+[data-testid="stAlertContentWarning"] [data-testid="stIconMaterial"] {{ color: var(--stl-warn) !important; }}
+[data-testid="stAlertContentError"] [data-testid="stIconMaterial"] {{ color: var(--stl-danger) !important; }}
+[data-testid="stAlertContentInfo"] [data-testid="stIconMaterial"] {{ color: var(--stl-info) !important; }}
 
 [data-testid="stChatMessage"] {{
-  background: var(--stl-card);
+  background: var(--stl-card) !important;
   border: 1px solid var(--stl-border);
   border-radius: 10px;
+  box-shadow: var(--stl-shadow);
 }}
-[data-testid="stChatInput"] {{
-  background: var(--stl-card);
-  border: 1px solid var(--stl-border);
+/* A `:material/...:` avatar is an "avatar custom", which Streamlit paints a
+   fixed near-black regardless of theme -- so this is matched by prefix and
+   restated in both appearances, not just in light. */
+[data-testid^="stChatMessageAvatar"] {{
+  background-color: var(--stl-accent-soft) !important;
+  color: var(--stl-accent) !important;
+  border: 1px solid var(--stl-accent-line) !important;
+}}
+/* The glyph carries its own colour and does not inherit the chip's. */
+[data-testid^="stChatMessageAvatar"] [data-testid="stIconMaterial"],
+[data-testid^="stChatMessageAvatar"] svg {{
+  color: var(--stl-accent) !important;
+  fill: var(--stl-accent) !important;
+}}
+[data-testid="stChatInput"], [data-testid="stChatInput"] > div {{
+  background: var(--stl-card) !important;
+  border-color: var(--stl-border) !important;
   border-radius: 10px;
 }}
+[data-testid="stChatInput"] {{ border: 1px solid var(--stl-border); }}
+[data-testid="stChatInputTextArea"] {{
+  background: transparent !important;
+  color: var(--stl-text) !important;
+}}
+[data-testid="stChatInputTextArea"]::placeholder {{ color: var(--stl-muted) !important; }}
+[data-testid="stChatInputSubmitButton"] {{
+  background: var(--stl-accent) !important;
+  color: var(--stl-accent-ink) !important;
+}}
+[data-testid="stChatInputSubmitButton"] svg,
+[data-testid="stChatInputSubmitButton"] [data-testid="stIconMaterial"] {{
+  color: var(--stl-accent-ink) !important;
+}}
+[data-testid="stChatInputInstructions"] {{ color: var(--stl-muted) !important; }}
 
 /* --- Controls ----------------------------------------------------------- */
 
-.stButton > button, .stDownloadButton > button {{
-  background: var(--stl-card);
-  color: var(--stl-text);
-  border: 1px solid var(--stl-border);
+/* The uploader's own browse button is not inside a `.stButton`, so it needs
+   naming separately or it keeps Streamlit's fill -- black text on black in a
+   light page. */
+.stButton > button, .stDownloadButton > button,
+[data-testid="stFileUploaderDropzone"] button {{
+  background: var(--stl-card) !important;
+  color: var(--stl-text) !important;
+  border: 1px solid var(--stl-border) !important;
   border-radius: 8px;
   font-weight: 500;
+  box-shadow: var(--stl-shadow);
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }}
-.stButton > button:hover, .stDownloadButton > button:hover {{
-  background: var(--stl-accent-soft);
-  border-color: var(--stl-accent);
-  color: var(--stl-accent);
+.stButton > button:hover, .stDownloadButton > button:hover,
+[data-testid="stFileUploaderDropzone"] button:hover {{
+  background: var(--stl-accent-soft) !important;
+  border-color: var(--stl-accent) !important;
+  color: var(--stl-accent) !important;
 }}
 .stButton > button[kind="primary"] {{
-  background: var(--stl-accent);
-  border-color: var(--stl-accent);
-  color: {p['accent_ink']};
+  background: var(--stl-accent) !important;
+  border-color: var(--stl-accent) !important;
+  color: var(--stl-accent-ink) !important;
   font-weight: 600;
 }}
 .stButton > button[kind="primary"]:hover {{
-  background: #1EA855; border-color: #1EA855; color: {p['accent_ink']};
+  background: var(--stl-accent-hover) !important;
+  border-color: var(--stl-accent-hover) !important;
+  color: var(--stl-accent-ink) !important;
 }}
 
+/* Text fields. The visible box is the *root element*, not the `input` inside
+   it -- style only the inner one and its dark 1px frame stays behind. */
+[data-testid="stTextInputRootElement"],
+[data-testid="stTextAreaRootElement"],
+[data-testid="stNumberInputContainer"] {{
+  background: var(--stl-raised) !important;
+  border-color: var(--stl-border) !important;
+}}
 .stTextInput input, .stTextArea textarea, .stNumberInput input {{
+  background: transparent !important;
+  border-color: var(--stl-border) !important;
+  color: var(--stl-text) !important;
+}}
+.stTextInput input::placeholder, .stTextArea textarea::placeholder {{
+  color: var(--stl-muted) !important;
+}}
+
+/* Selectbox. Streamlit 1.60 builds this on react-aria, so the closed control
+   is a `role="group"` and the open menu a portalled `role="listbox"` -- there
+   is no `data-baseweb="select"` here any more. */
+[data-testid="stSelectbox"] div[role="group"],
+[data-testid="stMultiSelect"] div[role="group"] {{
   background: var(--stl-raised) !important;
   border-color: var(--stl-border) !important;
   color: var(--stl-text) !important;
 }}
-[data-baseweb="select"] > div {{
-  background: var(--stl-raised) !important;
+[data-testid="stSelectbox"] input, [data-testid="stMultiSelect"] input {{
+  background: transparent !important; color: var(--stl-text) !important;
+}}
+[data-testid="stSelectbox"] input::placeholder {{ color: var(--stl-muted) !important; }}
+[data-testid="stSelectbox"] button svg, [data-testid="stMultiSelect"] button svg {{
+  color: var(--stl-muted) !important; fill: var(--stl-muted) !important;
+}}
+/* The open menu is portalled to the end of `body`, outside `.stApp`, so it is
+   matched globally rather than inside the app container. */
+[data-testid="stSelectboxVirtualDropdown"],
+[data-testid="stMultiSelectVirtualDropdown"],
+[role="listbox"] {{
+  background: var(--stl-card) !important;
   border-color: var(--stl-border) !important;
 }}
+[role="option"] {{ background: transparent !important; color: var(--stl-text) !important; }}
+[role="option"]:hover, [role="option"][data-focused], [role="option"][aria-selected="true"] {{
+  background: var(--stl-accent-soft) !important;
+  color: var(--stl-accent) !important;
+}}
+
+/* Checkbox and toggle share one shape: a hidden `input` in a `span`, then the
+   visible box -- a tick box, or a switch track holding a thumb. Matching that
+   box as `span + div` keeps the rule off the icons and tooltip in the label
+   beside it, which a looser `span`/`div` match sweeps up and paints green. */
+[data-testid="stCheckbox"] > label > span + div {{
+  background-color: var(--stl-raised) !important;
+  border-color: var(--stl-border) !important;
+}}
+[data-testid="stCheckbox"] > label:has(input:checked) > span + div {{
+  background-color: var(--stl-accent) !important;
+  border-color: var(--stl-accent) !important;
+}}
+[data-testid="stCheckbox"] > label > span + div svg {{ fill: var(--stl-accent-ink) !important; }}
+[data-testid="stCheckbox"] > label > span + div > div {{ background-color: #FFFFFF !important; }}
+[data-testid="stCheckbox"] label p {{ color: var(--stl-text); }}
+
+/* The track is the outer element and the fill its child, so painting the
+   outer one green would fill the whole bar. */
+[data-testid="stProgressBarTrack"] {{ background: var(--stl-raised) !important; }}
+[data-testid="stProgressBarTrack"] > div {{ background: var(--stl-accent) !important; }}
+
+/* The little "?" beside a widget label, and the bubble it opens. The bubble is
+   portalled out of `.stApp`, so it is matched globally. */
+[data-testid="stTooltipIcon"] svg {{ color: var(--stl-muted) !important; }}
+[data-testid="stTooltipHoverTarget"]:hover svg {{ color: var(--stl-accent) !important; }}
+[data-testid="stTooltipContent"] {{
+  background: var(--stl-card) !important;
+  color: var(--stl-text) !important;
+  border: 1px solid var(--stl-border) !important;
+  border-radius: 8px;
+}}
+[data-testid="stTooltipContent"] p, [data-testid="stTooltipContent"] code {{
+  color: var(--stl-text) !important;
+}}
+[data-testid="stSpinner"] p, [data-testid="stSpinner"] div {{ color: var(--stl-muted); }}
+
 [data-testid="stFileUploaderDropzone"] {{
-  background: var(--stl-card);
-  border: 1px dashed var(--stl-border);
+  background: var(--stl-card) !important;
+  border: 1px dashed var(--stl-border) !important;
   border-radius: 10px;
 }}
-[data-testid="stFileUploaderDropzone"]:hover {{ border-color: var(--stl-accent); }}
+[data-testid="stFileUploaderDropzone"]:hover {{ border-color: var(--stl-accent) !important; }}
+[data-testid="stFileUploaderDropzoneInstructions"] span,
+[data-testid="stFileUploaderDropzoneInstructions"] small {{ color: var(--stl-muted) !important; }}
+[data-testid="stFileUploaderFile"] {{ color: var(--stl-text) !important; }}
+
+*:focus-visible {{ outline: 2px solid var(--stl-accent) !important; outline-offset: 1px; }}
 
 /* --- Pieces drawn by this module --------------------------------------- */
 
@@ -229,7 +630,7 @@ a {{ color: var(--stl-accent); }}
   width: 30px; height: 30px; flex: none;
   display: grid; place-items: center;
   background: var(--stl-accent-soft);
-  border: 1px solid rgba(34, 197, 94, 0.30);
+  border: 1px solid var(--stl-accent-line);
   border-radius: 8px;
   color: var(--stl-accent);
 }}
@@ -259,15 +660,15 @@ a {{ color: var(--stl-accent); }}
 }}
 .stl-pill.ok {{
   color: var(--stl-accent); background: var(--stl-accent-soft);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: var(--stl-accent-line);
 }}
 .stl-pill.bad {{
   color: var(--stl-danger); background: var(--stl-danger-soft);
-  border-color: rgba(248, 113, 113, 0.35);
+  border-color: var(--stl-danger-line);
 }}
 .stl-pill.warn {{
   color: var(--stl-warn); background: var(--stl-warn-soft);
-  border-color: rgba(234, 179, 8, 0.35);
+  border-color: var(--stl-warn-line);
 }}
 .stl-pill.mute {{
   color: var(--stl-muted); background: var(--stl-raised);
@@ -278,6 +679,7 @@ a {{ color: var(--stl-accent); }}
   display: flex; align-items: center; gap: 10px;
   padding: 10px; border-radius: 10px;
   background: var(--stl-card); border: 1px solid var(--stl-border);
+  box-shadow: var(--stl-shadow);
 }}
 .stl-avatar {{
   width: 30px; height: 30px; flex: none;
@@ -297,6 +699,7 @@ a {{ color: var(--stl-accent); }}
   padding: 14px 16px; border-radius: 10px;
   background: var(--stl-card); border: 1px solid var(--stl-border);
   border-left: 3px solid var(--stl-accent);
+  box-shadow: var(--stl-shadow);
   font-size: 0.9rem; color: var(--stl-muted);
 }}
 .stl-note.bad {{ border-left-color: var(--stl-danger); }}
@@ -312,8 +715,8 @@ a {{ color: var(--stl-accent); }}
 
 
 def inject():
-    """Apply the stylesheet. Cheap enough to call on every rerun."""
-    st.markdown(_css(), unsafe_allow_html=True)
+    """Apply the stylesheet for the active mode. Safe on every rerun."""
+    st.markdown(_css(palette()), unsafe_allow_html=True)
     st.session_state[_INJECTED] = True
 
 
@@ -323,7 +726,7 @@ def inject():
 # font -- the same character is a pink blob on one machine and a grey outline on
 # another -- and it cannot take the accent colour. This is four linked nodes,
 # stroked in `currentColor`, so it is the same shape everywhere and turns green
-# because its container is green.
+# because its container is green -- in either theme, at either green.
 BRAND_MARK = (
     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" '
     'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '

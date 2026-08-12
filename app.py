@@ -2,10 +2,11 @@
 Fiverr Brain -- Streamlit chat UI.
 Run with: streamlit run app.py
 
-The shell is modelled on the Silverthread Labs Hub: a dark rail on the left
-holding the brand and the nav, a breadcrumb and status pills across the top of
-the page, and thin-bordered panels below. All of that lives in src/theme.py --
-this file decides *what* is on the page, never what colour it is.
+The shell is modelled on the Silverthread Labs Hub: a rail on the left holding
+the brand and the nav, a breadcrumb and status pills across the top of the page,
+and thin-bordered panels below, in either a dark or a light appearance. All of
+that lives in src/theme.py -- this file decides *what* is on the page, never
+what colour it is.
 """
 import streamlit as st
 
@@ -187,6 +188,13 @@ with st.sidebar:
         if gaps:
             for g in gaps[-15:]:
                 st.markdown(f"- {g['question']}")
+
+    st.divider()
+
+    # Appearance sits with the rail's other quiet controls, above the account
+    # card. Flipping it reruns the script, and theme.inject() at the top of the
+    # file has already run with the new value by then.
+    theme.switch()
 
     st.divider()
     status = profile_setup.profile_status()

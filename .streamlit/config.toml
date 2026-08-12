@@ -1,13 +1,83 @@
-# Streamlit's own theme. It only understands four colours, so it sets the
-# baseline -- widget internals this app never styles by hand -- and src/theme.py
-# does the rest. Keep these in step with PALETTE there; they are the same
-# colours, read off the Silverthread Labs Hub.
+# Streamlit's own theme -- the layer this app does not draw by hand: dropdown
+# popovers, alert tints, code blocks, focus rings, disabled text.
+#
+# `[theme.light]` and `[theme.dark]` are the same two palettes as `PALETTES` in
+# src/theme.py, and the browser picks between them from the reader's system
+# preference. src/theme.py then paints everything else and seeds its in-app
+# switch from whichever one Streamlit rendered, so a fresh visit is always
+# coherent. Keep the colours here and there in step; they are read off the
+# Silverthread Labs Hub.
 [theme]
 base = "dark"
+font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+showSidebarBorder = true
+
+[theme.dark]
 primaryColor = "#22C55E"
 backgroundColor = "#0A0A0A"
 secondaryBackgroundColor = "#0E0E0E"
 textColor = "#EDEDED"
+linkColor = "#22C55E"
+borderColor = "#1F1F1F"
+dataframeBorderColor = "#1F1F1F"
+dataframeHeaderBackgroundColor = "#141414"
+codeBackgroundColor = "#141414"
+codeTextColor = "#EDEDED"
+# The families behind st.success / st.warning / st.error / st.info.
+greenColor = "#22C55E"
+greenTextColor = "#EDEDED"
+greenBackgroundColor = "#0F2417"
+yellowColor = "#EAB308"
+yellowTextColor = "#EDEDED"
+yellowBackgroundColor = "#241E08"
+orangeColor = "#F59E0B"
+orangeTextColor = "#EDEDED"
+orangeBackgroundColor = "#241A08"
+redColor = "#F87171"
+redTextColor = "#EDEDED"
+redBackgroundColor = "#25100F"
+grayColor = "#8A8A8A"
+grayTextColor = "#8A8A8A"
+grayBackgroundColor = "#141414"
+
+[theme.dark.sidebar]
+backgroundColor = "#0C0C0C"
+secondaryBackgroundColor = "#141414"
+borderColor = "#1F1F1F"
+
+[theme.light]
+primaryColor = "#15803D"
+backgroundColor = "#F7F8F8"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#16181D"
+linkColor = "#15803D"
+borderColor = "#E3E5E8"
+dataframeBorderColor = "#E3E5E8"
+dataframeHeaderBackgroundColor = "#F1F2F4"
+codeBackgroundColor = "#F4F5F7"
+codeTextColor = "#16181D"
+greenColor = "#15803D"
+greenTextColor = "#16181D"
+greenBackgroundColor = "#ECFDF3"
+yellowColor = "#92400E"
+yellowTextColor = "#16181D"
+yellowBackgroundColor = "#FEF7E6"
+orangeColor = "#B45309"
+orangeTextColor = "#16181D"
+orangeBackgroundColor = "#FEF3E6"
+redColor = "#B91C1C"
+redTextColor = "#16181D"
+redBackgroundColor = "#FEF0F0"
+grayColor = "#5F6875"
+grayTextColor = "#5F6875"
+grayBackgroundColor = "#F1F2F4"
+
+[theme.light.sidebar]
+backgroundColor = "#FCFCFD"
+secondaryBackgroundColor = "#F1F2F4"
+borderColor = "#E3E5E8"
 
 [client]
 toolbarMode = "minimal"
