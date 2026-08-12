@@ -7,8 +7,8 @@ mistake that never reaches a unit test: a widget key collision, a session-state
 value written after the widget was drawn, a `st.columns` count mismatch, an
 exception inside a rendering branch nobody imported.
 
-The chat model is not stubbed here because nothing sends a message -- these
-walk the forms, which make no API calls.
+Nothing here spends money. Almost every test walks a form, which makes no API
+call at all; the one test that does send a message stubs the brain first.
 """
 import pytest
 
@@ -53,7 +53,8 @@ def assert_no_exceptions(at):
 def test_the_app_boots():
     at = run_app()
     assert_no_exceptions(at)
-    assert any("Fiverr Brain" in t.value for t in at.title)
+    # The name lives in the sidebar rail's masthead, the way the Hub does it.
+    assert any("Fiverr Brain" in m.value for m in at.sidebar.markdown)
 
 
 def test_a_missing_api_key_is_an_actionable_message_not_a_traceback(monkeypatch):
@@ -79,6 +80,55 @@ def test_every_mode_renders_without_raising():
                  "/buyer-reply"]:
         at = run_app(mode=mode)
         assert_no_exceptions(at)
+
+
+# --- The shell ---------------------------------------------------------------
+
+def test_the_header_names_the_page_you_are_on():
+    """The breadcrumb is the only thing telling you which mode is active once
+    the big per-screen headers are gone."""
+    at = run_app(mode="/buyer-reply")
+    assert_no_exceptions(at)
+    assert any("Buyer reply" in m.value for m in at.markdown)
+
+
+def test_an_empty_chat_offers_example_questions():
+    at = run_app(mode="Ask a question")
+    assert_no_exceptions(at)
+    assert any(b.label == "What do my gigs cost?" for b in at.button)
+
+
+def test_clicking_an_example_asks_it(kb, monkeypatch):
+    """The examples are the front door -- if the click does not become a
+    question, the empty state is decoration.
+
+    This is the one smoke test that sends a message, so the brain is stubbed:
+    patching the class reaches the instance `st.cache_resource` is holding.
+    """
+    from src.rag import FiverrBrain
+
+    monkeypatch.setattr(
+        FiverrBrain, "ask",
+        lambda self, question, **kwargs: {
+            "answer": f"stubbed answer to: {question}",
+            "sources": [], "chunks_used": 0, "citations": [],
+        },
+    )
+
+    at = run_app(mode="Ask a question")
+    example = next(b for b in at.button if b.label == "What do my gigs cost?")
+    at = example.click().run()
+
+    assert_no_exceptions(at)
+    assert at.session_state.messages, "the click produced no exchange"
+    assert at.session_state.messages[0]["content"] == "What do my gigs cost?"
+
+
+def test_the_rail_shows_who_the_answers_are_about(kb):
+    ps.save_profile(seeded_profile("rail_seller"), validate=False)
+    at = run_app(mode="Ask a question")
+    assert_no_exceptions(at)
+    assert any("Smoke Tester" in m.value for m in at.sidebar.markdown)
 
 
 # --- The wizard -------------------------------------------------------------
@@ -171,7 +221,12 @@ def test_a_complete_profile_enables_save(kb):
 def test_the_import_screen_renders_its_upload_area():
     at = run_app(mode="🖼️ Import from screenshot")
     assert_no_exceptions(at)
-    assert any("Import from a screenshot" in h.value for h in at.header)
+
+    text = " ".join(m.value for m in at.markdown)
+    assert "Screenshot import" in text
+    # The Fiverr-only rule is the feature; it has to be stated before upload,
+    # not discovered by being refused.
+    assert "Fiverr screenshots only" in text
 
 
 def test_the_import_review_screen_renders_an_extraction(kb):

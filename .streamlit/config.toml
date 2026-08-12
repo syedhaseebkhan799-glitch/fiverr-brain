@@ -1,0 +1,19 @@
+# Streamlit's own theme. It only understands four colours, so it sets the
+# baseline -- widget internals this app never styles by hand -- and src/theme.py
+# does the rest. Keep these in step with PALETTE there; they are the same
+# colours, read off the Silverthread Labs Hub.
+[theme]
+base = "dark"
+primaryColor = "#22C55E"
+backgroundColor = "#0A0A0A"
+secondaryBackgroundColor = "#0E0E0E"
+textColor = "#EDEDED"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+# Keep this equal to config.MAX_UPLOAD_BYTES (10 MB). The uploader prints this
+# number as its own limit, so leaving Streamlit's 200 MB default would promise
+# a size the app then refuses -- after the user has waited for the upload.
+maxUploadSize = 10

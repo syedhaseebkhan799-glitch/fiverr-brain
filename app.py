@@ -1,20 +1,66 @@
 """
 Fiverr Brain -- Streamlit chat UI.
 Run with: streamlit run app.py
+
+The shell is modelled on the Silverthread Labs Hub: a dark rail on the left
+holding the brand and the nav, a breadcrumb and status pills across the top of
+the page, and thin-bordered panels below. All of that lives in src/theme.py --
+this file decides *what* is on the page, never what colour it is.
 """
 import streamlit as st
 
-from src import config, logging_utils, ocr_ui, profile_setup, profile_ui
+from src import config, logging_utils, ocr_ui, profile_setup, profile_ui, theme
 from src.rag import EmbeddingError, FiverrBrain, LLMError
 from src.modes import new_gig, optimize, onboarding, buyer_reply
 
 PROFILE_MODE = "👤 Profile onboarding"
 OCR_MODE = "🖼️ Import from screenshot"
 
-st.set_page_config(page_title="Fiverr Brain", page_icon="🧠", layout="centered")
+# Mode values are the app's internal names and are matched by string elsewhere,
+# so they are kept exactly as they were. Only the *display* changes here.
+MODES = [
+    "Ask a question",
+    "/new-gig",
+    "/optimize",
+    "/buyer-reply",
+    "/onboarding",
+    PROFILE_MODE,
+    OCR_MODE,
+]
 
-st.title("🧠 Fiverr Brain")
-st.caption("Internal assistant for your Fiverr business — gigs, policies, and SOPs.")
+NAV_LABELS = {
+    "Ask a question": "💬  Ask the brain",
+    "/new-gig": "✨  New gig",
+    "/optimize": "📈  Optimize a gig",
+    "/buyer-reply": "✉️  Buyer reply",
+    "/onboarding": "🎓  Team onboarding",
+    PROFILE_MODE: "👤  Seller profile",
+    OCR_MODE: "🖼️  Screenshot import",
+}
+
+PAGES = {
+    "Ask a question": (
+        "Ask the brain",
+        "Answers are built only from your saved profile, gigs, policies and SOPs.",
+    ),
+    "/new-gig": ("New gig", "Draft a new gig from what already works for you."),
+    "/optimize": ("Optimize a gig", "Tighten an existing gig's title, pricing and copy."),
+    "/buyer-reply": ("Buyer reply", "Draft a reply to a buyer in your own voice."),
+    "/onboarding": ("Team onboarding", "Walk a new team member through your SOPs."),
+    PROFILE_MODE: ("Seller profile", "Six steps. Nothing is indexed until you save."),
+    OCR_MODE: ("Screenshot import", "Fiverr screenshots only — anything else is refused."),
+}
+
+EXAMPLES = [
+    "What do my gigs cost?",
+    "How do I handle a revision request?",
+    "Which gig should I promote this week?",
+]
+
+PENDING_KEY = "pending_question"
+
+st.set_page_config(page_title="Fiverr Brain", page_icon="🧠", layout="wide")
+theme.inject()
 
 
 @st.cache_resource(show_spinner="Loading the brain (first run downloads the embedding model)...")
@@ -40,35 +86,13 @@ except Exception as e:
     )
     st.stop()
 
-if brain.index_warning:
-    st.warning(brain.index_warning)
-
-if config.MAX_DISTANCE_IS_ESTIMATED:
-    # The refusal boundary is what stops the brain answering from irrelevant
-    # chunks. Running on an unmeasured estimate is workable but the user
-    # should know, rather than discovering it through a strange answer.
-    st.info(
-        f"Relevance threshold `MAX_DISTANCE={config.MAX_DISTANCE}` is an "
-        f"estimate for the **{config.EMBEDDING_PROVIDER}** embeddings, not a "
-        f"measurement. Run `python scripts/check_threshold.py` once and set "
-        f"`MAX_DISTANCE` in your `.env` to what it suggests."
-    )
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- Sidebar ---
+# --- Sidebar: the rail -------------------------------------------------------
 with st.sidebar:
-    st.header("Mode")
-    MODES = [
-        PROFILE_MODE,
-        OCR_MODE,
-        "Ask a question",
-        "/new-gig",
-        "/optimize",
-        "/onboarding",
-        "/buyer-reply",
-    ]
+    theme.brand("Fiverr Brain", "SILVERTHREAD LABS")
+
     # First visit of a session lands on onboarding until the profile is set up.
     # After that the radio owns the value, so a seller who deliberately switches
     # away with an incomplete profile isn't dragged back on every rerun.
@@ -78,18 +102,24 @@ with st.sidebar:
             if profile_setup.profile_status()["complete"]
             else PROFILE_MODE
         )
-    mode = st.radio("Choose a mode", MODES, key="mode")
+    mode = st.radio(
+        "Navigation",
+        MODES,
+        key="mode",
+        format_func=lambda m: NAV_LABELS.get(m, m),
+        label_visibility="collapsed",
+    )
 
     st.divider()
-    profile_ui.render_sidebar_status()
+
     # Which seller every answer is grounded in. Shown only when there is more
     # than one, so the common single-seller case stays uncluttered.
     seller_id = profile_ui.render_seller_picker()
-    st.divider()
+
     trainee = "demo_trainee"
     if mode == "/onboarding":
+        theme.section("Trainee")
         trainee = st.text_input("Trainee name", value="demo_trainee").strip() or "demo_trainee"
-        st.caption("Onboarding steps")
         for item in onboarding.get_progress(trainee):
             done = st.checkbox(
                 item["step"],
@@ -104,52 +134,90 @@ with st.sidebar:
                 st.rerun()
         st.divider()
 
-    st.caption("Knowledge base layers: profile & gigs, policies, SOPs.")
-
-    if st.button("🔄 Rebuild index"):
-        from src import ingest
-        warnings = []
-        try:
-            with st.spinner("Reindexing knowledge base..."):
-                n = ingest.build_index(verbose=False, warn=warnings.append)
-                brain.refresh_collection()
-        except ingest.RebuildInProgress as e:
-            st.info(str(e))
-            n = None
-        except EmbeddingError as e:
-            st.error(f"Reindex failed, your existing index is unchanged.\n\n{e}")
-            n = None
-        except Exception as e:
-            st.error(f"Reindex failed, your existing index is unchanged.\n\n`{e}`")
-            n = None
-        if n is not None:
-            if n:
-                st.success(f"Reindexed {n} chunks.")
-                if config.is_ephemeral_host():
-                    st.info(
-                        "This host resets its filesystem on restart. To make the "
-                        "change permanent, run `python scripts/reindex.py` locally, "
-                        "commit `data/chroma_db/`, and push."
-                    )
-            else:
-                st.warning("Nothing indexed — no readable .md files found in kb/.")
-            for w in warnings:
-                st.warning(w)
-
-    if st.button("🗑️ Clear chat"):
+    if st.button("🗑️  Clear chat", use_container_width=True):
         st.session_state.messages = []
         brain.reset_history()
         st.rerun()
 
-    st.divider()
-    gaps = logging_utils.get_unanswered_questions()
-    with st.expander(f"❓ Knowledge gaps ({len(gaps)})"):
-        if not gaps:
-            st.caption("No unanswered questions logged yet.")
-        else:
-            st.caption("Questions the KB could not answer — consider adding content.")
+    # Maintenance is for whoever runs the app, not for whoever uses it, so it
+    # is folded away rather than sitting in the nav.
+    with st.expander("⚙️  Maintenance"):
+        st.caption("Knowledge base layers: profile & gigs, policies, SOPs.")
+
+        if st.button("🔄 Rebuild index", use_container_width=True):
+            from src import ingest
+            warnings = []
+            try:
+                with st.spinner("Reindexing knowledge base..."):
+                    n = ingest.build_index(verbose=False, warn=warnings.append)
+                    brain.refresh_collection()
+            except ingest.RebuildInProgress as e:
+                st.info(str(e))
+                n = None
+            except EmbeddingError as e:
+                st.error(f"Reindex failed, your existing index is unchanged.\n\n{e}")
+                n = None
+            except Exception as e:
+                st.error(f"Reindex failed, your existing index is unchanged.\n\n`{e}`")
+                n = None
+            if n is not None:
+                if n:
+                    st.success(f"Reindexed {n} chunks.")
+                    if config.is_ephemeral_host():
+                        st.info(
+                            "This host resets its filesystem on restart. To make the "
+                            "change permanent, run `python scripts/reindex.py` locally, "
+                            "commit `data/chroma_db/`, and push."
+                        )
+                else:
+                    st.warning("Nothing indexed — no readable .md files found in kb/.")
+                for w in warnings:
+                    st.warning(w)
+
+        gaps = logging_utils.get_unanswered_questions()
+        st.caption(f"❓ Knowledge gaps: {len(gaps)}")
+        if gaps:
             for g in gaps[-15:]:
                 st.markdown(f"- {g['question']}")
+
+    st.divider()
+    status = profile_setup.profile_status()
+    profile = profile_setup.load_profile(seller_id) if seller_id else None
+    if profile is not None:
+        username = profile.basic.username or profile.resolved_seller_id()
+        theme.account_card(
+            profile.basic.name or username,
+            f"@{username} · {status['gig_count']} gig(s)",
+        )
+    else:
+        theme.account_card("No seller yet", "Start in Seller profile")
+
+# --- Page header -------------------------------------------------------------
+page_title, page_subtitle = PAGES.get(mode, (mode, ""))
+
+if status["complete"]:
+    pills = theme.pill("✓ Profile complete", "ok")
+else:
+    pills = theme.pill(
+        f"Profile {status['steps_done']}/{status['total_steps']}", "warn"
+    )
+pills += " " + theme.pill(f"{status['gig_count']} gig(s)", "mute")
+
+theme.page_header("Fiverr Brain", page_title, page_subtitle, pills)
+
+if brain.index_warning:
+    st.warning(brain.index_warning)
+
+if config.MAX_DISTANCE_IS_ESTIMATED:
+    # The refusal boundary is what stops the brain answering from irrelevant
+    # chunks. Running on an unmeasured estimate is workable but the user
+    # should know, rather than discovering it through a strange answer.
+    st.info(
+        f"Relevance threshold `MAX_DISTANCE={config.MAX_DISTANCE}` is an "
+        f"estimate for the **{config.EMBEDDING_PROVIDER}** embeddings, not a "
+        f"measurement. Run `python scripts/check_threshold.py` once and set "
+        f"`MAX_DISTANCE` in your `.env` to what it suggests."
+    )
 
 # --- These two are forms, not chats: render and stop here ---
 if mode == PROFILE_MODE:
@@ -162,8 +230,24 @@ if mode == OCR_MODE:
 
 # --- Render chat history ---
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
+    with st.chat_message(msg["role"], avatar="🧠" if msg["role"] == "assistant" else "👤"):
         st.markdown(msg["content"])
+
+# An empty chat is the app's front door. A blank page there teaches nobody what
+# to type, so it offers three questions that are one click away.
+if not st.session_state.messages and mode == "Ask a question":
+    theme.note(
+        "<b>Ask anything about your Fiverr business.</b><br>"
+        "Every answer is built from your own profile, gigs, policies and SOPs — "
+        "never from the open internet. If the knowledge base does not cover it, "
+        "the brain says so instead of guessing."
+    )
+    st.write("")
+    for col, example in zip(st.columns(len(EXAMPLES)), EXAMPLES):
+        with col:
+            if st.button(example, use_container_width=True, key=f"ex_{example}"):
+                st.session_state[PENDING_KEY] = example
+                st.rerun()
 
 # --- Mode-specific inputs ---
 PLACEHOLDERS = {
@@ -175,6 +259,10 @@ PLACEHOLDERS = {
 }
 
 raw_input_text = st.chat_input(PLACEHOLDERS[mode])
+
+# A clicked example is the same as a typed question from here on.
+if not raw_input_text and PENDING_KEY in st.session_state:
+    raw_input_text = st.session_state.pop(PENDING_KEY)
 
 if raw_input_text:
     user_input = raw_input_text.strip()
@@ -190,7 +278,7 @@ if raw_input_text:
         )
         user_input = user_input[: config.MAX_INPUT_CHARS]
 
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="👤"):
         st.markdown(user_input)
 
     answer = None
@@ -198,7 +286,7 @@ if raw_input_text:
     citations = []
     chunks_used = 0
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="🧠"):
         with st.spinner("Thinking..."):
             try:
                 if mode == "Ask a question":

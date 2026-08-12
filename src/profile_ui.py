@@ -418,8 +418,7 @@ def render(brain):
     """Draw the whole six-step onboarding wizard."""
     _ensure_state()
 
-    st.header("👤 Profile onboarding")
-
+    # The page title and breadcrumb are drawn by the shell in app.py.
     _render_loader()
 
     profile = collect_profile()

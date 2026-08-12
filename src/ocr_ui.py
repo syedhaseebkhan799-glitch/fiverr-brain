@@ -12,28 +12,32 @@ not exist; a visible one is an invitation to fill it in.
 """
 import streamlit as st
 
-from . import ocr, profile_setup as ps, profile_ui
+from . import ocr, profile_setup as ps, profile_ui, theme
 from .rag import fence
 
 EXTRACTED_KEY = "ocr_extracted"
 REPORT_KEY = "ocr_report"
 FILENAME_KEY = "ocr_filename"
+# The image is kept so the review screen can show it beside what was read --
+# checking an extraction without the picture in front of you is guesswork.
+IMAGE_KEY = "ocr_image"
 
 
 def _reset():
-    for key in (EXTRACTED_KEY, REPORT_KEY, FILENAME_KEY):
+    for key in (EXTRACTED_KEY, REPORT_KEY, FILENAME_KEY, IMAGE_KEY):
         st.session_state.pop(key, None)
 
 
 def _render_upload():
-    st.caption(
-        "Drop in a screenshot of your Fiverr profile or a gig page. It is read "
-        "by an AI vision model, shown to you for checking, and only saved once "
-        "you confirm it. Images only, up to "
-        f"{ocr.config.MAX_UPLOAD_BYTES // 1_048_576} MB — location data is "
-        "stripped before the image is sent. **Only Fiverr screenshots are "
-        "accepted** — anything else is refused without being extracted."
+    theme.note(
+        "<b>Fiverr screenshots only.</b> A profile, gig page, order, inbox or "
+        "reviews page from fiverr.com. The image is read by an AI vision model, "
+        "shown to you for checking, and only saved once you confirm it. "
+        "Anything that is not Fiverr is refused and nothing is extracted from "
+        f"it.<br><br>Images up to {ocr.config.MAX_UPLOAD_BYTES // 1_048_576} MB "
+        "— location data is stripped before the image is sent."
     )
+    st.write("")
 
     uploaded = st.file_uploader(
         "Screenshot",
@@ -58,8 +62,13 @@ def _render_upload():
                 profile, report = ocr.extract(data, uploaded.name)
         except ocr.NotFiverrError as e:
             # The one refusal that is about the picture, not the pipeline:
-            # the model looked and it simply is not Fiverr.
-            st.error(f"🚫 {e}")
+            # the model looked and it simply is not Fiverr. Given its own
+            # banner because it is a verdict on the upload, not a failure.
+            st.markdown(
+                theme.pill("✕ Not a Fiverr screenshot", "bad"),
+                unsafe_allow_html=True,
+            )
+            st.error(str(e))
             return
         except ocr.OCRError as e:
             st.error(str(e))
@@ -74,6 +83,7 @@ def _render_upload():
         st.session_state[EXTRACTED_KEY] = profile
         st.session_state[REPORT_KEY] = report
         st.session_state[FILENAME_KEY] = uploaded.name
+        st.session_state[IMAGE_KEY] = data
         st.rerun()
 
 
@@ -81,8 +91,9 @@ def _render_report(report):
     found = report["sections_found"]
     missing = report["sections_missing"]
 
+    st.markdown(theme.pill("✓ Fiverr screenshot", "ok"), unsafe_allow_html=True)
     if report.get("image_shows"):
-        st.caption(f"The model recognised this as: *{report['image_shows']}*")
+        st.caption(f"Recognised as: *{report['image_shows']}*")
 
     st.metric(
         "Fields read from the image",
@@ -115,15 +126,28 @@ def _render_review(brain):
     profile = st.session_state[EXTRACTED_KEY]
     report = st.session_state[REPORT_KEY]
 
+    filename = st.session_state.get(FILENAME_KEY, "the screenshot")
+
     st.subheader("Check what was read")
     st.caption(
-        f"From `{st.session_state.get(FILENAME_KEY, 'the screenshot')}`. "
-        "Nothing has been saved yet. Correct anything that is wrong — the model "
-        "was told to leave a field blank rather than guess, so blanks are "
-        "expected."
+        f"From `{filename}`. Nothing has been saved yet. Correct anything that "
+        "is wrong — the model was told to leave a field blank rather than "
+        "guess, so blanks are expected."
     )
 
-    _render_report(report)
+    # Image and reading side by side: checking an extraction means comparing it
+    # against the picture, and a reader who has to scroll between the two will
+    # skim instead.
+    shot, reading = st.columns([1, 1], gap="large")
+    with shot:
+        image = st.session_state.get(IMAGE_KEY)
+        if image is not None:
+            st.image(image, caption=filename, use_container_width=True)
+        else:
+            st.caption("The image is no longer held in this session.")
+    with reading:
+        _render_report(report)
+
     st.divider()
 
     existing = ps.load_profile(profile.resolved_seller_id())
@@ -179,8 +203,8 @@ def _render_review(brain):
 
 
 def render(brain):
-    st.header("🖼️ Import from a screenshot")
-
+    # The page title and breadcrumb are drawn by the shell in app.py, so this
+    # starts straight at the content.
     if EXTRACTED_KEY in st.session_state:
         _render_review(brain)
     else:

@@ -107,6 +107,22 @@ class FakeVisionClient:
         return type("R", (), {"choices": [type("C", (), {"message": message})()]})()
 
 
+# --- Upload limits ----------------------------------------------------------
+
+def test_streamlits_upload_limit_matches_the_apps_own():
+    """The uploader widget prints Streamlit's limit, not the app's. If the two
+    drift, the widget invites a file size that `validate_image` then refuses --
+    after the user has already waited for the upload."""
+    import tomllib
+    from pathlib import Path
+
+    config_file = Path(__file__).resolve().parents[1] / ".streamlit" / "config.toml"
+    settings = tomllib.loads(config_file.read_text(encoding="utf-8"))
+
+    megabytes = settings["server"]["maxUploadSize"]
+    assert megabytes * 1_048_576 == config.MAX_UPLOAD_BYTES
+
+
 # --- Upload validation ------------------------------------------------------
 
 def test_a_valid_png_is_accepted():
