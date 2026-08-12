@@ -28,14 +28,19 @@ MODES = [
     OCR_MODE,
 ]
 
+# Material Symbols, not emoji. Streamlit renders `:material/name:` in any label
+# it treats as markdown, and the result is a single-colour line icon that
+# inherits the text colour -- so an inactive row's icon is grey and the active
+# row's icon turns green with its label, which is what the Hub's rail does.
+# Emoji cannot do that: they carry their own colours and differ per platform.
 NAV_LABELS = {
-    "Ask a question": "💬  Ask the brain",
-    "/new-gig": "✨  New gig",
-    "/optimize": "📈  Optimize a gig",
-    "/buyer-reply": "✉️  Buyer reply",
-    "/onboarding": "🎓  Team onboarding",
-    PROFILE_MODE: "👤  Seller profile",
-    OCR_MODE: "🖼️  Screenshot import",
+    "Ask a question": ":material/forum: Ask the brain",
+    "/new-gig": ":material/add_circle: New gig",
+    "/optimize": ":material/trending_up: Optimize a gig",
+    "/buyer-reply": ":material/mail: Buyer reply",
+    "/onboarding": ":material/school: Team onboarding",
+    PROFILE_MODE: ":material/person: Seller profile",
+    OCR_MODE: ":material/image: Screenshot import",
 }
 
 PAGES = {
@@ -58,6 +63,9 @@ EXAMPLES = [
 ]
 
 PENDING_KEY = "pending_question"
+
+BOT_AVATAR = ":material/psychology:"
+USER_AVATAR = ":material/person:"
 
 st.set_page_config(page_title="Fiverr Brain", page_icon="🧠", layout="wide")
 theme.inject()
@@ -134,17 +142,17 @@ with st.sidebar:
                 st.rerun()
         st.divider()
 
-    if st.button("🗑️  Clear chat", use_container_width=True):
+    if st.button(":material/delete_sweep: Clear chat", use_container_width=True):
         st.session_state.messages = []
         brain.reset_history()
         st.rerun()
 
     # Maintenance is for whoever runs the app, not for whoever uses it, so it
     # is folded away rather than sitting in the nav.
-    with st.expander("⚙️  Maintenance"):
+    with st.expander(":material/settings: Maintenance"):
         st.caption("Knowledge base layers: profile & gigs, policies, SOPs.")
 
-        if st.button("🔄 Rebuild index", use_container_width=True):
+        if st.button(":material/refresh: Rebuild index", use_container_width=True):
             from src import ingest
             warnings = []
             try:
@@ -175,7 +183,7 @@ with st.sidebar:
                     st.warning(w)
 
         gaps = logging_utils.get_unanswered_questions()
-        st.caption(f"❓ Knowledge gaps: {len(gaps)}")
+        st.caption(f":material/help: Knowledge gaps: {len(gaps)}")
         if gaps:
             for g in gaps[-15:]:
                 st.markdown(f"- {g['question']}")
@@ -230,7 +238,8 @@ if mode == OCR_MODE:
 
 # --- Render chat history ---
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"], avatar="🧠" if msg["role"] == "assistant" else "👤"):
+    avatar = BOT_AVATAR if msg["role"] == "assistant" else USER_AVATAR
+    with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
 
 # An empty chat is the app's front door. A blank page there teaches nobody what
@@ -278,7 +287,7 @@ if raw_input_text:
         )
         user_input = user_input[: config.MAX_INPUT_CHARS]
 
-    with st.chat_message("user", avatar="👤"):
+    with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(user_input)
 
     answer = None
@@ -286,7 +295,7 @@ if raw_input_text:
     citations = []
     chunks_used = 0
 
-    with st.chat_message("assistant", avatar="🧠"):
+    with st.chat_message("assistant", avatar=BOT_AVATAR):
         with st.spinner("Thinking..."):
             try:
                 if mode == "Ask a question":
@@ -324,7 +333,8 @@ if raw_input_text:
         # The chunks the answer was actually built from. Filenames say which
         # document; this says which sentences, so a claim can be checked.
         if citations:
-            with st.expander(f"📎 {len(citations)} source chunk(s) used"):
+            with st.expander(
+                    f":material/description: {len(citations)} source chunk(s) used"):
                 for c in citations:
                     label = c["source"]
                     if c["sectionType"] not in ("unknown", c["layer"]):

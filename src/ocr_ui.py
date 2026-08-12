@@ -56,7 +56,8 @@ def _render_upload():
 
     st.image(data, caption=uploaded.name, use_container_width=True)
 
-    if st.button("🔍 Read this screenshot", type="primary"):
+    if st.button(":material/document_scanner: Read this screenshot",
+                 type="primary"):
         try:
             with st.spinner("Reading the screenshot..."):
                 profile, report = ocr.extract(data, uploaded.name)
@@ -110,7 +111,7 @@ def _render_report(report):
             f"Saving this would put a mostly-empty profile into your knowledge "
             f"base, which makes the brain answer worse, not better. Either "
             f"upload a clearer screenshot, or fill the profile in yourself in "
-            f"**👤 Profile onboarding**."
+            f"**Seller profile**."
         )
     elif missing:
         st.warning(
@@ -161,10 +162,11 @@ def _render_review(brain):
                  "updates what this screenshot shows.",
         )
 
-    with st.expander("📄 What the model extracted, field by field", expanded=False):
+    with st.expander(":material/data_object: What the model extracted, "
+                     "field by field", expanded=False):
         st.json(profile.model_dump(exclude_none=False))
 
-    st.markdown("**Send it to the onboarding form to edit and save**")
+    st.markdown("**Send it to the profile form to edit and save**")
     st.caption(
         "The form is the only path into the knowledge base — the same "
         "validation, the same six steps, the same save. This just pre-fills it."
@@ -172,7 +174,7 @@ def _render_review(brain):
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("✏️ Open in the onboarding form", type="primary",
+        if st.button(":material/edit: Open in the profile form", type="primary",
                      use_container_width=True):
             final = ocr.merge_into(existing, profile) if merge else profile
             profile_ui._load_into_state(final)
@@ -190,7 +192,7 @@ def _render_review(brain):
             st.rerun()
 
     with c2:
-        if st.button("🗑️ Discard and try another screenshot",
+        if st.button(":material/delete: Discard and try another screenshot",
                      use_container_width=True):
             _reset()
             st.rerun()
@@ -213,7 +215,7 @@ def render(brain):
     st.divider()
     st.caption(
         "Nothing is fetched from fiverr.com. Data enters this app only through "
-        "the onboarding form or a screenshot you upload yourself."
+        "the profile form or a screenshot you upload yourself."
     )
 
 

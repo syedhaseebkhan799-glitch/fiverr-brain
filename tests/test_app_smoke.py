@@ -183,7 +183,7 @@ def test_each_of_the_six_steps_renders(kb):
 
 def test_adding_a_gig_renders_three_package_columns(kb):
     at = run_app(mode="👤 Profile onboarding", wiz_step=3)
-    at = next(b for b in at.button if b.label == "➕ Add a gig").click().run()
+    at = next(b for b in at.button if b.label == ":material/add: Add a gig").click().run()
 
     assert_no_exceptions(at)
     for tier in ("basic", "standard", "premium"):
@@ -192,8 +192,8 @@ def test_adding_a_gig_renders_three_package_columns(kb):
 
 def test_adding_an_faq_row_renders(kb):
     at = run_app(mode="👤 Profile onboarding", wiz_step=3)
-    at = next(b for b in at.button if b.label == "➕ Add a gig").click().run()
-    at = next(b for b in at.button if b.label == "➕ Add an FAQ").click().run()
+    at = next(b for b in at.button if b.label == ":material/add: Add a gig").click().run()
+    at = next(b for b in at.button if b.label == ":material/add: Add an FAQ").click().run()
 
     assert_no_exceptions(at)
     assert at.text_input(key="wiz_w_gig0_faq0_q") is not None
@@ -212,7 +212,7 @@ def test_a_complete_profile_enables_save(kb):
     at = run_app(mode="👤 Profile onboarding")
     assert_no_exceptions(at)
 
-    save = next(b for b in at.button if b.label == "💾 Save profile & index")
+    save = next(b for b in at.button if b.label == ":material/save: Save profile & index")
     assert not save.disabled
 
 

@@ -237,7 +237,7 @@ def _render_scalar_step(fields, brain=None, bio_helper=False):
     for field in fields:
         _widget(field, f"{PREFIX}{field.key}")
         if bio_helper and field.key == "bio":
-            if st.button("✨ Draft my bio from the answers above", key="draft_bio"):
+            if st.button(":material/auto_awesome: Draft my bio from the answers above", key="draft_bio"):
                 try:
                     with st.spinner("Drafting..."):
                         bio = ps.suggest_bio(brain, collect_profile())
@@ -259,7 +259,7 @@ def _render_gigs_step():
 
     for i, gig in enumerate(gigs):
         title = gig.get("title") or f"Gig {i + 1}"
-        with st.expander(f"📄 {title}", expanded=len(gigs) == 1):
+        with st.expander(f":material/description: {title}", expanded=len(gigs) == 1):
             base = f"{WIDGET}gig{i}_"
             for f in ps.GIG_FIELDS:
                 _widget(f, f"{base}{f.key}", gig.get(f.key, ""))
@@ -290,18 +290,18 @@ def _render_gigs_step():
 
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("➕ Add an FAQ", key=f"{base}add_faq"):
+                if st.button(":material/add: Add an FAQ", key=f"{base}add_faq"):
                     _sync_gigs()
                     gig["faqs"].append({"question": "", "answer": ""})
                     st.rerun()
             with c2:
-                if st.button("🗑️ Remove this gig", key=f"{base}del"):
+                if st.button(":material/delete: Remove this gig", key=f"{base}del"):
                     _sync_gigs()
                     gigs.pop(i)
                     _drop_keys(f"{WIDGET}gig")
                     st.rerun()
 
-    if st.button("➕ Add a gig"):
+    if st.button(":material/add: Add a gig"):
         _sync_gigs()
         gigs.append(_blank_gig())
         st.rerun()
@@ -317,13 +317,13 @@ def _render_row_step(state_key, fields, prefix, blank, singular):
         with st.expander(f"{label[:60]}", expanded=len(rows) == 1):
             for f in fields:
                 _widget(f, f"{WIDGET}{prefix}{i}_{f.key}", row.get(f.key, ""))
-            if st.button(f"🗑️ Remove this {singular}", key=f"{WIDGET}{prefix}{i}_del"):
+            if st.button(f":material/delete: Remove this {singular}", key=f"{WIDGET}{prefix}{i}_del"):
                 _sync_rows(state_key, fields, prefix)
                 rows.pop(i)
                 _drop_keys(f"{WIDGET}{prefix}")
                 st.rerun()
 
-    if st.button(f"➕ Add a {singular}", key=f"{WIDGET}{prefix}_add"):
+    if st.button(f":material/add: Add a {singular}", key=f"{WIDGET}{prefix}_add"):
         _sync_rows(state_key, fields, prefix)
         rows.append(dict(blank))
         st.rerun()
@@ -384,7 +384,7 @@ def save_and_index(brain, profile):
     except ingest.RebuildInProgress:
         st.warning(
             "Saved, but another rebuild is running so the index wasn't updated. "
-            "Use **🔄 Rebuild index** in the sidebar once it finishes."
+            "Use **Rebuild index** under Maintenance in the sidebar once it finishes."
         )
         return seller_id
     except EmbeddingError as e:
@@ -432,7 +432,8 @@ def render(brain):
              f"{status['steps_done']}/{status['total_steps']} steps complete",
     )
     st.caption(" · ".join(
-        f"{'✅' if not status['step_problems'][s['key']] else '⬜'} {s['number']}. {s['title']}"
+        f"{':material/check_circle:' if not status['step_problems'][s['key']] else ':material/radio_button_unchecked:'}"
+        f" {s['number']}. {s['title']}"
         for s in STEPS
     ))
 
@@ -464,7 +465,7 @@ def render(brain):
 
     with save:
         blocking = ps.validate_profile(profile)
-        if st.button("💾 Save profile & index", type="primary",
+        if st.button(":material/save: Save profile & index", type="primary",
                      disabled=bool(blocking), use_container_width=True):
             if save_and_index(brain, profile):
                 st.session_state[SELLER_KEY] = profile.resolved_seller_id()
@@ -474,7 +475,7 @@ def render(brain):
         for problem in problems:
             st.caption(f":red[• {problem}]")
 
-    if st.button("💾 Save draft and come back later"):
+    if st.button(":material/save: Save draft and come back later"):
         ps.save_draft(profile, step_index)
         st.success("Draft saved. It will be waiting when you reopen this page.")
 
@@ -531,7 +532,7 @@ def _render_loader():
     st.info("You have an unfinished profile draft.")
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("↩️ Resume the draft", use_container_width=True):
+        if st.button(":material/history: Resume the draft", use_container_width=True):
             st.session_state[DISMISSED_DRAFT_KEY] = True
             # The draft is what the widgets now hold. Marking it loaded stops
             # the selector reloading the stored seller straight over the top.
@@ -540,7 +541,7 @@ def _render_loader():
             st.session_state[STEP_KEY] = draft_step
             st.rerun()
     with c2:
-        if st.button("🗑️ Discard it and start fresh", use_container_width=True):
+        if st.button(":material/delete: Discard it and start fresh", use_container_width=True):
             ps.clear_draft()
             st.session_state[DISMISSED_DRAFT_KEY] = True
             st.rerun()
@@ -550,13 +551,13 @@ def _render_danger_zone(brain):
     seller_id = st.session_state.get(SELLER_KEY)
     if not seller_id or not ps.load_profile(seller_id):
         return
-    with st.expander("⚠️ Delete this seller"):
+    with st.expander(":material/warning: Delete this seller"):
         st.caption(
             f"Removes `{seller_id}` from the profile database, deletes the "
             f"markdown export, and drops their vectors from the index."
         )
         if st.checkbox("I want to delete this seller", key=f"{PREFIX}confirm_del"):
-            if st.button("🗑️ Delete permanently"):
+            if st.button(":material/delete_forever: Delete permanently"):
                 ps.delete_profile(seller_id)
                 ps.remove_from_index(seller_id, brain)
                 _clear_state()
@@ -565,21 +566,6 @@ def _render_danger_zone(brain):
                 st.session_state.pop(EDITING_KEY, None)
                 st.success(f"Deleted `{seller_id}`.")
                 st.rerun()
-
-
-def render_sidebar_status():
-    """Compact progress line for the sidebar. Returns the status dict."""
-    status = ps.profile_status()
-    if status["complete"]:
-        st.caption(f"👤 Profile complete · {status['gig_count']} gig(s)")
-    elif status["started"]:
-        st.caption(
-            f"👤 Profile {status['steps_done']}/{status['total_steps']} steps — "
-            f"finish it in **Profile onboarding**"
-        )
-    else:
-        st.caption("👤 No profile yet — start in **Profile onboarding**")
-    return status
 
 
 def render_seller_picker():

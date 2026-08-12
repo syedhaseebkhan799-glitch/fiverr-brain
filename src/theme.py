@@ -229,10 +229,11 @@ a {{ color: var(--stl-accent); }}
   width: 30px; height: 30px; flex: none;
   display: grid; place-items: center;
   background: var(--stl-accent-soft);
-  border: 1px solid var(--stl-border);
+  border: 1px solid rgba(34, 197, 94, 0.30);
   border-radius: 8px;
-  font-size: 15px;
+  color: var(--stl-accent);
 }}
+.stl-brand-mark svg {{ display: block; }}
 .stl-brand-name {{
   font-size: 0.98rem; font-weight: 650; color: var(--stl-text);
   line-height: 1.15;
@@ -318,8 +319,29 @@ def inject():
 
 # --- Small pieces -----------------------------------------------------------
 
+# A drawn mark rather than an emoji. An emoji is a different picture in every
+# font -- the same character is a pink blob on one machine and a grey outline on
+# another -- and it cannot take the accent colour. This is four linked nodes,
+# stroked in `currentColor`, so it is the same shape everywhere and turns green
+# because its container is green.
+BRAND_MARK = (
+    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" '
+    'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true">'
+    '<circle cx="6.2" cy="7" r="2.1"/>'
+    '<circle cx="17.4" cy="5.6" r="1.9"/>'
+    '<circle cx="16.2" cy="17.2" r="2.3"/>'
+    '<circle cx="7" cy="16.1" r="1.7"/>'
+    '<path d="M8.2 8.5 L14.5 15.6"/>'
+    '<path d="M8.3 6.4 L15.5 5.8"/>'
+    '<path d="M6.5 9.1 L6.9 14.4"/>'
+    '<path d="M8.7 15.8 L13.9 17"/>'
+    '</svg>'
+)
+
+
 def brand(name: str = "Fiverr Brain", sub: str = "SILVERTHREAD LABS",
-          mark: str = "🧠"):
+          mark: str = BRAND_MARK):
     """The rail's masthead, matching the Hub's logo block."""
     st.markdown(
         f'<div class="stl-brand">'
