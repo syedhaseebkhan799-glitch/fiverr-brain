@@ -185,6 +185,35 @@ class SellerProfile(_Model):
         )
 
 
+class ScreenshotReading(_Model):
+    """The vision model's whole answer to one screenshot.
+
+    The gate comes first: before extracting anything, the model has to say
+    whether the image is from Fiverr at all. A random photo, a WhatsApp chat or
+    an Upwork profile must be refused with an explanation, not silently turned
+    into an empty profile -- an empty profile looks like a bad extraction,
+    while a refusal tells the user what actually happened.
+    """
+
+    is_fiverr_screenshot: bool = Field(
+        False,
+        description=(
+            "True ONLY if the image clearly shows Fiverr: a fiverr.com page or "
+            "the Fiverr app -- a seller profile, gig page, order page, inbox, "
+            "dashboard, earnings, analytics or reviews. False for anything "
+            "else, including other freelance platforms."
+        ),
+    )
+    image_shows: Optional[str] = Field(
+        None,
+        description=(
+            "One short sentence describing what the image actually shows, "
+            "e.g. 'A Fiverr gig page for logo design' or 'A photo of a cat'."
+        ),
+    )
+    profile: SellerProfile = Field(default_factory=SellerProfile)
+
+
 # --- Identity --------------------------------------------------------------
 
 def slugify(text: str, fallback: str = "") -> str:
@@ -423,7 +452,8 @@ def _strictify(node):
 def ocr_json_schema() -> dict:
     """The schema handed to the vision model.
 
-    Generated from `SellerProfile`, never hand-written -- that is what stops
-    the extractor and the form from drifting apart.
+    Generated from `ScreenshotReading` (the Fiverr-or-not gate wrapped around
+    `SellerProfile`), never hand-written -- that is what stops the extractor
+    and the form from drifting apart.
     """
-    return _strictify(SellerProfile.model_json_schema())
+    return _strictify(ScreenshotReading.model_json_schema())

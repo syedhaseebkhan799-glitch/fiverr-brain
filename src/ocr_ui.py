@@ -31,7 +31,8 @@ def _render_upload():
         "by an AI vision model, shown to you for checking, and only saved once "
         "you confirm it. Images only, up to "
         f"{ocr.config.MAX_UPLOAD_BYTES // 1_048_576} MB — location data is "
-        "stripped before the image is sent."
+        "stripped before the image is sent. **Only Fiverr screenshots are "
+        "accepted** — anything else is refused without being extracted."
     )
 
     uploaded = st.file_uploader(
@@ -55,6 +56,11 @@ def _render_upload():
         try:
             with st.spinner("Reading the screenshot..."):
                 profile, report = ocr.extract(data, uploaded.name)
+        except ocr.NotFiverrError as e:
+            # The one refusal that is about the picture, not the pipeline:
+            # the model looked and it simply is not Fiverr.
+            st.error(f"🚫 {e}")
+            return
         except ocr.OCRError as e:
             st.error(str(e))
             return
@@ -75,6 +81,9 @@ def _render_report(report):
     found = report["sections_found"]
     missing = report["sections_missing"]
 
+    if report.get("image_shows"):
+        st.caption(f"The model recognised this as: *{report['image_shows']}*")
+
     st.metric(
         "Fields read from the image",
         f"{report['populated']} of {report['total']}",
@@ -85,8 +94,8 @@ def _render_report(report):
         st.error(
             f"**This screenshot gave very little back** — only "
             f"{report['populated']} of {report['total']} fields were readable. "
-            f"That usually means the image is cropped, blurry, or is not a "
-            f"Fiverr profile or gig page.\n\n"
+            f"That usually means the image is cropped, blurry, or shows a "
+            f"Fiverr page with little profile detail on it.\n\n"
             f"Saving this would put a mostly-empty profile into your knowledge "
             f"base, which makes the brain answer worse, not better. Either "
             f"upload a clearer screenshot, or fill the profile in yourself in "

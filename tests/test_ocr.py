@@ -78,6 +78,16 @@ MOSTLY_NULL = {
 }
 
 
+def reading(profile, is_fiverr=True, shows="A Fiverr seller profile"):
+    """What the vision model now replies with: the gate wrapped around
+    the profile."""
+    return {
+        "is_fiverr_screenshot": is_fiverr,
+        "image_shows": shows,
+        "profile": profile,
+    }
+
+
 class FakeVisionClient:
     """Stands in for the OpenAI client. Records what it was sent."""
 
@@ -166,7 +176,7 @@ def test_prepare_upload_validates_before_stripping():
 
 
 def test_the_image_is_sent_as_a_base64_data_url():
-    client = FakeVisionClient(EXTRACTED)
+    client = FakeVisionClient(reading(EXTRACTED))
     ocr.extract(make_image(), "shot.png", client=client)
 
     content = client.seen["messages"][0]["content"]
@@ -178,7 +188,7 @@ def test_the_image_is_sent_as_a_base64_data_url():
 
 def test_extraction_returns_a_typed_profile():
     profile, report = ocr.extract(make_image(), "shot.png",
-                                  client=FakeVisionClient(EXTRACTED))
+                                  client=FakeVisionClient(reading(EXTRACTED)))
     assert profile.basic.name == "Ayesha Khan"
     assert profile.gigs[0].packages[0].price == 25.0
     assert profile.review_summary.total_reviews == 210
@@ -188,13 +198,13 @@ def test_extraction_returns_a_typed_profile():
 def test_the_extraction_is_marked_as_ocr_sourced():
     """Downstream has to be able to tell machine-read data from typed data."""
     profile, _ = ocr.extract(make_image(), "shot.png",
-                             client=FakeVisionClient(EXTRACTED))
+                             client=FakeVisionClient(reading(EXTRACTED)))
     assert profile.source_type == "ocr"
 
 
 def test_the_request_binds_the_reply_to_the_shared_schema():
     """This is what stops the extractor drifting from the form."""
-    client = FakeVisionClient(EXTRACTED)
+    client = FakeVisionClient(reading(EXTRACTED))
     ocr.extract(make_image(), "shot.png", client=client)
 
     fmt = client.seen["response_format"]
@@ -204,7 +214,7 @@ def test_the_request_binds_the_reply_to_the_shared_schema():
 
 
 def test_the_prompt_forbids_inventing_values():
-    client = FakeVisionClient(EXTRACTED)
+    client = FakeVisionClient(reading(EXTRACTED))
     ocr.extract(make_image(), "shot.png", client=client)
 
     text = next(p["text"] for p in client.seen["messages"][0]["content"]
@@ -237,7 +247,59 @@ def test_api_errors_become_readable_messages():
     exc = openai.RateLimitError("boom", response=response, body=None)
     with pytest.raises(ocr.OCRError, match="rate limit"):
         ocr.extract(make_image(), "shot.png",
-                    client=FakeVisionClient(EXTRACTED, raise_exc=exc))
+                    client=FakeVisionClient(reading(EXTRACTED), raise_exc=exc))
+
+
+# --- The Fiverr gate ----------------------------------------------------------
+
+def test_a_non_fiverr_image_is_refused_with_an_explanation():
+    """A cat photo must come back as a refusal that says it saw a cat photo,
+    not as an empty profile the user has to puzzle over."""
+    client = FakeVisionClient(
+        reading(MOSTLY_NULL, is_fiverr=False, shows="A photo of a cat"))
+    with pytest.raises(ocr.NotFiverrError) as exc_info:
+        ocr.extract(make_image(), "cat.png", client=client)
+
+    message = str(exc_info.value)
+    assert "not a Fiverr image" in message
+    assert "A photo of a cat" in message
+
+
+def test_the_refusal_reads_fine_when_the_model_gave_no_description():
+    client = FakeVisionClient(reading(MOSTLY_NULL, is_fiverr=False, shows=None))
+    with pytest.raises(ocr.NotFiverrError, match="not a Fiverr image"):
+        ocr.extract(make_image(), "mystery.png", client=client)
+
+
+def test_nothing_is_extracted_from_a_refused_image():
+    """Even if the model disobeys and fills fields in, a false gate means the
+    caller never sees a profile at all."""
+    client = FakeVisionClient(
+        reading(EXTRACTED, is_fiverr=False, shows="An Upwork profile"))
+    with pytest.raises(ocr.NotFiverrError):
+        ocr.extract(make_image(), "upwork.png", client=client)
+
+
+def test_a_not_fiverr_error_is_still_an_ocr_error():
+    """The UI's generic OCRError handler must also catch the refusal."""
+    assert issubclass(ocr.NotFiverrError, ocr.OCRError)
+
+
+def test_the_prompt_tells_the_model_to_check_for_fiverr_first():
+    client = FakeVisionClient(reading(EXTRACTED))
+    ocr.extract(make_image(), "shot.png", client=client)
+
+    text = next(p["text"] for p in client.seen["messages"][0]["content"]
+                if p["type"] == "text").lower()
+    assert "is this image from fiverr" in text
+    assert "is_fiverr_screenshot" in text
+
+
+def test_a_fiverr_image_reports_what_the_model_recognised():
+    _, report = ocr.extract(
+        make_image(), "shot.png",
+        client=FakeVisionClient(reading(EXTRACTED, shows="A Fiverr gig page")))
+    assert report["image_shows"] == "A Fiverr gig page"
 
 
 # --- Confidence -------------------------------------------------------------
@@ -245,7 +307,7 @@ def test_api_errors_become_readable_messages():
 def test_a_mostly_null_extraction_is_flagged_low_confidence():
     """The brief: tell the user, do not silently save empty fields."""
     profile, report = ocr.extract(make_image(), "shot.png",
-                                  client=FakeVisionClient(MOSTLY_NULL))
+                                  client=FakeVisionClient(reading(MOSTLY_NULL)))
     assert report["low_confidence"] is True
     assert report["populated"] == 0
     assert "bio" in report["sections_missing"]
@@ -253,7 +315,7 @@ def test_a_mostly_null_extraction_is_flagged_low_confidence():
 
 def test_a_good_extraction_is_not_flagged():
     _, report = ocr.extract(make_image(), "shot.png",
-                            client=FakeVisionClient(EXTRACTED))
+                            client=FakeVisionClient(reading(EXTRACTED)))
     assert report["low_confidence"] is False
     assert "gigs" in report["sections_found"]
     assert "basic information" in report["sections_found"]
@@ -261,7 +323,7 @@ def test_a_good_extraction_is_not_flagged():
 
 def test_the_report_names_what_was_missing():
     _, report = ocr.extract(make_image(), "shot.png",
-                            client=FakeVisionClient(EXTRACTED))
+                            client=FakeVisionClient(reading(EXTRACTED)))
     assert "portfolio" in report["sections_missing"]
     assert "reviews" in report["sections_found"]  # the summary was readable
 

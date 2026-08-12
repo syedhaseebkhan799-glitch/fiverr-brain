@@ -196,10 +196,22 @@ def test_ocr_schema_is_strict_mode_compatible():
 
 
 def test_ocr_schema_covers_all_six_sections():
-    props = ocr_json_schema()["properties"]
+    schema = ocr_json_schema()
+    profile_node = schema["properties"]["profile"]
+    if "$ref" in profile_node:  # pydantic renders nested models as refs
+        profile_node = schema["$defs"][profile_node["$ref"].split("/")[-1]]
+    props = profile_node["properties"]
     for section in ("basic", "about", "skills", "gigs", "portfolio",
                     "reviews", "review_summary"):
         assert section in props
+
+
+def test_ocr_schema_carries_the_fiverr_gate():
+    """The model literally cannot answer without saying whether the image is
+    from Fiverr — the gate is part of the schema, not just the prompt."""
+    props = ocr_json_schema()["properties"]
+    assert "is_fiverr_screenshot" in props
+    assert "image_shows" in props
 
 
 # --- Storage round trip -----------------------------------------------------

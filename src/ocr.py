@@ -19,6 +19,10 @@ Three things make the output trustworthy enough to show a user:
 Uploads are validated before any of that: images only, 10 MB cap, and the file
 is re-encoded through Pillow, which drops EXIF -- a phone screenshot can carry
 GPS coordinates, and nothing downstream needs them.
+
+The model is also the gate: it must first declare whether the image is from
+Fiverr at all. A non-Fiverr image (a random photo, another site, another
+freelance platform) raises `NotFiverrError` and nothing is extracted.
 """
 import base64
 import io
@@ -35,12 +39,25 @@ from openai import (
 )
 
 from . import config
-from .schema import SellerProfile, ocr_json_schema
+from .schema import ScreenshotReading, SellerProfile, ocr_json_schema
 
-EXTRACTION_PROMPT = """You are reading a screenshot of a Fiverr seller profile or
-gig page and extracting what it shows into structured data.
+EXTRACTION_PROMPT = """You are reading a screenshot and extracting what it shows
+into structured data — but ONLY if the screenshot is from Fiverr.
 
-Absolute rules:
+FIRST, decide: is this image from Fiverr? Fiverr screenshots include a
+fiverr.com page or the Fiverr app — a seller profile, gig page, order page,
+inbox, dashboard, earnings, analytics or reviews. Look for Fiverr's layout,
+branding, URLs or wording.
+
+- If it IS from Fiverr: set is_fiverr_screenshot to true, describe the page in
+  one sentence in image_shows, and extract everything visible into profile.
+- If it is NOT from Fiverr (a random photo, a document, a chat, another
+  website, another freelance platform like Upwork or Freelancer): set
+  is_fiverr_screenshot to false, say what the image actually shows in
+  image_shows, and leave every profile field null with empty lists. Extract
+  NOTHING from a non-Fiverr image.
+
+Absolute rules for the extraction:
 - Return ONLY what is visibly present in the image.
 - Use null for every field you cannot read in the image. Empty lists for lists.
 - NEVER infer, guess, complete or invent a value. If a price is cut off, it is
@@ -58,6 +75,10 @@ Return the data now."""
 
 class OCRError(RuntimeError):
     """Raised when a screenshot cannot be turned into structured data."""
+
+
+class NotFiverrError(OCRError):
+    """Raised when the uploaded image is not a Fiverr screenshot at all."""
 
 
 # --- Upload validation ------------------------------------------------------
@@ -219,7 +240,7 @@ def extract(image_bytes: bytes, filename: str = "", client=None
             response_format={
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "seller_profile",
+                    "name": "screenshot_reading",
                     "strict": True,
                     "schema": ocr_json_schema(),
                 },
@@ -257,15 +278,30 @@ def extract(image_bytes: bytes, filename: str = "", client=None
         )
 
     try:
-        profile = SellerProfile.model_validate(payload)
+        reading = ScreenshotReading.model_validate(payload)
     except Exception as e:
         raise OCRError(
             f"The extracted data did not match the profile schema, so nothing "
             f"was imported: {e}"
         )
 
+    if not reading.is_fiverr_screenshot:
+        shows = (reading.image_shows or "").strip()
+        detail = f"It appears to show: **{shows}**\n\n" if shows else ""
+        raise NotFiverrError(
+            "I can't read this screenshot — it is not a Fiverr image, so "
+            "nothing was extracted.\n\n"
+            f"{detail}"
+            "This tool only reads screenshots from Fiverr: a seller profile, "
+            "a gig page, orders, reviews or anything else from fiverr.com. "
+            "Please upload a Fiverr screenshot instead."
+        )
+
+    profile = reading.profile
     profile.source_type = "ocr"
-    return profile, confidence_report(profile)
+    report = confidence_report(profile)
+    report["image_shows"] = (reading.image_shows or "").strip()
+    return profile, report
 
 
 def merge_into(base: Optional[SellerProfile], extracted: SellerProfile
