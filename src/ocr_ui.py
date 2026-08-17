@@ -22,6 +22,12 @@ FILENAME_KEY = "ocr_filename"
 # checking an extraction without the picture in front of you is guesswork.
 IMAGE_KEY = "ocr_image"
 
+# A mode switch this screen asks for, read and cleared by the shell in app.py
+# before it draws the navigation radio. It cannot write `mode` itself: that key
+# belongs to the radio, and Streamlit raises if a widget's key is assigned to
+# after the widget exists -- which it always does by the time this screen runs.
+PENDING_MODE_KEY = "pending_mode"
+
 
 def _reset():
     for key in (EXTRACTED_KEY, REPORT_KEY, FILENAME_KEY, IMAGE_KEY):
@@ -188,7 +194,7 @@ def _render_review(brain):
             st.session_state[profile_ui.DISMISSED_DRAFT_KEY] = True
             ps.save_draft(final, 0)
             _reset()
-            st.session_state.mode = "👤 Profile onboarding"
+            st.session_state[PENDING_MODE_KEY] = "👤 Profile onboarding"
             st.rerun()
 
     with c2:

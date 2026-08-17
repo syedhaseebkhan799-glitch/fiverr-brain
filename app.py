@@ -102,6 +102,14 @@ if "messages" not in st.session_state:
 with st.sidebar:
     theme.brand("Fiverr Brain", "SILVERTHREAD LABS")
 
+    # A screen that wants to hand off to another mode leaves the request in
+    # pending_mode, and it is applied here, before the radio is built. The radio
+    # owns `mode`, and Streamlit raises on any write to a widget's key once the
+    # widget exists -- so the handoff has to land ahead of it, not from inside
+    # the screen that asked for it.
+    if ocr_ui.PENDING_MODE_KEY in st.session_state:
+        st.session_state.mode = st.session_state.pop(ocr_ui.PENDING_MODE_KEY)
+
     # First visit of a session lands on onboarding until the profile is set up.
     # After that the radio owns the value, so a seller who deliberately switches
     # away with an incomplete profile isn't dragged back on every rerun.

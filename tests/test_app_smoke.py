@@ -82,6 +82,23 @@ def test_every_mode_renders_without_raising():
         assert_no_exceptions(at)
 
 
+def test_a_screen_can_hand_off_to_another_mode():
+    """The screenshot import sends the seller to the wizard once an extraction
+    is accepted. Writing `mode` from inside that screen raised
+    StreamlitAPIException every time -- the navigation radio owns the key, and
+    it has already been drawn by the time any screen renders. The request has
+    to travel in a separate key that the shell applies before the radio."""
+    from src import ocr_ui
+
+    at = run_app(**{ocr_ui.PENDING_MODE_KEY: "👤 Profile onboarding",
+                    "mode": "🖼️ Import from screenshot"})
+
+    assert_no_exceptions(at)
+    assert at.session_state["mode"] == "👤 Profile onboarding"
+    # Cleared, or every later rerun drags the seller back to the wizard.
+    assert ocr_ui.PENDING_MODE_KEY not in at.session_state
+
+
 # --- The shell ---------------------------------------------------------------
 
 def test_the_header_names_the_page_you_are_on():
