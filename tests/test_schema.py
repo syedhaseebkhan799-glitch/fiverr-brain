@@ -173,9 +173,9 @@ def test_seller_id_prefers_the_username():
 # --- The JSON schema handed to the vision model -----------------------------
 
 def test_ocr_schema_is_strict_mode_compatible():
-    """OpenAI's strict mode rejects a schema with optional properties or
-    unlisted extras, and the whole point is that the extractor is bound to the
-    same models the form uses."""
+    """Claude's structured-output mode rejects a schema with optional
+    properties or unlisted extras, and the whole point is that the extractor is
+    bound to the same models the form uses."""
     schema = ocr_json_schema()
 
     def check(node, path="root"):

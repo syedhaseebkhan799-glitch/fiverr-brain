@@ -77,16 +77,17 @@ Built against `docs/00_BRIEF.md`, following `docs/02_IMPLEMENTATION_PLAN.md`
       portfolio item, a reviews digest) carrying `sellerId`, `sectionType`,
       `gigId`, `sourceType`
 - [x] ~400-token chunks with ~50 overlap (word-approximated, no new dependency)
-- [x] `EMBEDDING_PROVIDER` switch; `text-embedding-3-small` is the default,
-      local MiniLM stays a one-line fallback
+- [x] `EMBEDDING_PROVIDER` switch; local MiniLM is the default (Anthropic has
+      no embeddings endpoint), `text-embedding-3-small` a one-line opt-in
 - [x] Per-seller upsert — re-onboarding replaces that seller's vectors and
       leaves every other seller, and the shared policy/SOP layers, untouched
 - [x] `MAX_DISTANCE` re-measured for the **local** provider against the new
       chunking and document structure — all 11 cases classify correctly, 1.49
       confirmed (suggested 1.50)
-- [ ] **`MAX_DISTANCE` re-tuned for the OpenAI embeddings** — blocked, no API
-      key available. `scripts/check_threshold.py` prints the value to use; the
-      app shows a banner until it is set
+- [ ] **`MAX_DISTANCE` re-tuned for the OpenAI embeddings** — no longer on the
+      default path (local is the default and its 1.49 is measured). Only needed
+      if you opt into `EMBEDDING_PROVIDER=openai`; `scripts/check_threshold.py`
+      prints the value, and the app shows a banner until it is set
 
 ### Stage (d) — Retrieval in the chat endpoint
 - [x] `TOP_K = 5`
@@ -96,7 +97,7 @@ Built against `docs/00_BRIEF.md`, following `docs/02_IMPLEMENTATION_PLAN.md`
 
 ### Stage (e) — Screenshot OCR import
 - [x] Upload area: images only, 10 MB cap, EXIF stripped by re-encoding
-- [x] OpenAI vision model, image sent as base64
+- [x] Claude vision model, image sent as base64
 - [x] Reply bound to `SellerProfile.model_json_schema()` in strict mode
 - [x] Prompt requires `null` for anything not visible; inventing forbidden
 - [x] Editable review screen before anything is saved
@@ -107,11 +108,15 @@ Built against `docs/00_BRIEF.md`, following `docs/02_IMPLEMENTATION_PLAN.md`
 ### Docs and tests
 - [x] `docs/SETUP.md`
 - [x] README updated
-- [x] 212 tests, none of which spends money
+- [x] 228 tests, none of which spends money
 
 ### Still needs YOUR input
 - [x] Migration run: profile + 3 gigs (9 packages, PKR) imported; sources
       renamed to `*.md.imported`; index rebuilt to 8 chunks at schema version 2
-- [ ] Add `OPENAI_API_KEY` to `.env`, then `python scripts/reindex.py`
-- [ ] Run `python scripts/check_threshold.py` and set `MAX_DISTANCE` for OpenAI
+- [ ] Add `ANTHROPIC_API_KEY` to `.env` and run the app once — no reindex
+      needed, the committed index was built with the local embedder that is
+      now the default
 - [ ] Test the screenshot import against a real Fiverr screenshot
+- [ ] Only if you opt into `EMBEDDING_PROVIDER=openai`: add `OPENAI_API_KEY`,
+      run `python scripts/reindex.py`, then `python scripts/check_threshold.py`
+      and set `MAX_DISTANCE`

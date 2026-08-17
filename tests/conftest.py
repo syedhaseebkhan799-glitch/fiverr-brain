@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Must happen before `from src import config` anywhere.
-os.environ.setdefault("OPENAI_API_KEY", "test-key-not-used")
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-used")
 os.environ.setdefault("EMBEDDING_PROVIDER", "local")
 
 from src import config  # noqa: E402

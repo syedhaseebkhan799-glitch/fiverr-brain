@@ -3,8 +3,14 @@
 streamlit==1.60.0
 chromadb==1.5.9
 sentence-transformers==5.6.1
-openai==2.50.0
+anthropic==0.120.2
 python-dotenv==1.2.2
+
+# Only needed for EMBEDDING_PROVIDER=openai. Claude answers every question and
+# reads every screenshot, but Anthropic has no embeddings endpoint, so the one
+# cloud embedding option is still OpenAI's. On the default (local) provider
+# nothing imports this and it can be removed.
+openai==2.50.0
 
 # Both of these were already installed as transitive dependencies (pydantic via
 # chromadb, Pillow via streamlit). They are declared now because the app

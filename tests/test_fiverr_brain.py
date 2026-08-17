@@ -2,7 +2,7 @@
 Regression suite for the Fiverr Brain edge-case audit.
 
 Every test here maps to a bug that was actually present in the app. No test
-makes a real OpenAI call -- the LLM is stubbed, so the suite is free to run.
+makes a real Anthropic call -- the LLM is stubbed, so the suite is free to run.
 
     python -m pytest tests/ -q
 """
@@ -32,8 +32,8 @@ def test_brain_uses_the_shared_model(brain):
 
 
 def test_missing_api_key_raises_actionable_error(monkeypatch):
-    monkeypatch.setattr(config, "OPENAI_API_KEY", "")
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         FiverrBrain()
 
 
@@ -195,20 +195,35 @@ def test_fence_strips_marker_forgery():
 # LLM error handling -- these used to surface as raw tracebacks
 # --------------------------------------------------------------------------
 
+def _reply(text, stop_reason="end_turn"):
+    """A Messages response, shaped the way the SDK returns one: typed blocks,
+    of which only the text ones carry the answer."""
+    blocks = [
+        type("B", (), {"type": "thinking", "thinking": ""})(),
+        type("B", (), {"type": "text", "text": text})(),
+    ]
+    return type("R", (), {"content": blocks, "stop_reason": stop_reason})()
+
+
 @pytest.mark.parametrize("exc_name,status,expect", [
     ("AuthenticationError", 401, "rejected"),
     ("RateLimitError", 429, "rate limit"),
 ])
-def test_openai_errors_become_friendly_messages(exc_name, status, expect):
-    import openai
+def test_anthropic_errors_become_friendly_messages(exc_name, status, expect):
+    import anthropic
+    import httpx
+
     real = FiverrBrain()
-    exc_cls = getattr(openai, exc_name)
-    response = type("R", (), {"status_code": status, "headers": {}, "request": None})()
+    exc_cls = getattr(anthropic, exc_name)
+    response = httpx.Response(
+        status,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
 
     def boom(*a, **k):
         raise exc_cls("boom", response=response, body=None)
 
-    real.client_llm.chat.completions.create = boom
+    real.client_llm.messages.create = boom
     with pytest.raises(LLMError) as e:
         real._call_llm("hello")
     assert expect in str(e.value).lower()
@@ -216,11 +231,41 @@ def test_openai_errors_become_friendly_messages(exc_name, status, expect):
 
 def test_empty_model_response_is_rejected():
     real = FiverrBrain()
-    msg = type("M", (), {"content": None})()
-    choice = type("C", (), {"message": msg})()
-    real.client_llm.chat.completions.create = lambda *a, **k: type("R", (), {"choices": [choice]})()
+    real.client_llm.messages.create = lambda *a, **k: _reply("")
     with pytest.raises(LLMError, match="empty"):
         real._call_llm("hello")
+
+
+def test_a_refusal_is_reported_not_read_as_an_empty_answer():
+    """A safety decline is a 200 with no text. Reading the blocks without
+    checking stop_reason first would report it as an empty response and send
+    the user off to rephrase for the wrong reason."""
+    real = FiverrBrain()
+    real.client_llm.messages.create = lambda *a, **k: _reply("", "refusal")
+    with pytest.raises(LLMError, match="declined"):
+        real._call_llm("hello")
+
+
+def test_the_system_prompt_is_sent_as_the_system_parameter():
+    """The guardrails only outrank the retrieved text if they arrive as system
+    instructions rather than as one more user turn."""
+    real = FiverrBrain()
+    seen = {}
+
+    def capture(*a, **k):
+        seen.update(k)
+        return _reply("ok")
+
+    real.client_llm.messages.create = capture
+    real._call_llm("hello")
+    assert seen["system"] == config.SYSTEM_PROMPT
+    assert [m["role"] for m in seen["messages"]] == ["user"]
+
+
+def test_max_tokens_leaves_room_for_thinking_above_the_answer_budget():
+    """max_tokens caps thinking and the answer together, so a ceiling set to
+    the answer budget alone would truncate replies mid-sentence."""
+    assert config.MAX_OUTPUT_TOKENS > config.MAX_ANSWER_TOKENS
 
 
 def test_oversized_prompt_is_truncated_not_sent_whole():
@@ -228,11 +273,10 @@ def test_oversized_prompt_is_truncated_not_sent_whole():
     seen = {}
 
     def capture(*a, **k):
-        seen["len"] = len(k["messages"][1]["content"])
-        msg = type("M", (), {"content": "ok"})()
-        return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+        seen["len"] = len(k["messages"][0]["content"])
+        return _reply("ok")
 
-    real.client_llm.chat.completions.create = capture
+    real.client_llm.messages.create = capture
     real._call_llm("x" * (config.MAX_PROMPT_CHARS * 3))
     assert seen["len"] < config.MAX_PROMPT_CHARS * 1.1
 
@@ -399,9 +443,10 @@ def test_onboarding_trainees_are_independent(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_env_example_documents_the_variables_the_code_reads():
-    """.env.example told users to set GEMINI_API_KEY; the code reads OPENAI_API_KEY."""
+    """.env.example once told users to set a key the code never read. It has to
+    name the one the app actually boots on."""
     text = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
-    assert "OPENAI_API_KEY" in text
+    assert "ANTHROPIC_API_KEY" in text
     assert "GEMINI" not in text.upper()
 
 

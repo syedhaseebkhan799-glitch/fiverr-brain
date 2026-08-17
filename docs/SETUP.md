@@ -30,34 +30,42 @@ cp .env.example .env
 
 | Variable | Required | Default | What it does |
 |---|---|---|---|
-| `OPENAI_API_KEY` | **Yes** | — | Chat, screenshot reading, and (on the default provider) embeddings. The app refuses to start without it. |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | The model that writes answers. |
-| `VISION_MODEL` | No | `gpt-4o-mini` | Reads uploaded screenshots. Must support vision. |
-| `EMBEDDING_PROVIDER` | No | `openai` | `openai` or `local`. See §3. |
-| `EMBEDDING_MODEL` | No | per provider | `text-embedding-3-small` for openai, `all-MiniLM-L6-v2` for local. |
+| `ANTHROPIC_API_KEY` | **Yes** | — | Chat and screenshot reading. The app refuses to start without it. |
+| `ANTHROPIC_MODEL` | No | `claude-opus-5` | The model that writes answers. |
+| `VISION_MODEL` | No | `claude-opus-5` | Reads uploaded screenshots. Must support vision. |
+| `LLM_EFFORT` | No | `low` | How hard the model thinks before answering: `low`…`max`. Higher costs more and is slower. |
+| `VISION_EFFORT` | No | `medium` | Same knob, for screenshot reading. |
+| `EMBEDDING_PROVIDER` | No | `local` | `local` or `openai`. See §3. |
+| `OPENAI_API_KEY` | Only for `EMBEDDING_PROVIDER=openai` | — | Nothing else reads it. |
+| `EMBEDDING_MODEL` | No | per provider | `all-MiniLM-L6-v2` for local, `text-embedding-3-small` for openai. |
 | `MAX_DISTANCE` | No | per provider | The relevance cut-off. See §5 — **you should set this**. |
 
-The key never reaches the browser. Streamlit executes entirely server-side, and
-both `.env` and `.streamlit/secrets.toml` are gitignored.
+The app needs **one** key by default. Keys never reach the browser — Streamlit
+executes entirely server-side, and both `.env` and `.streamlit/secrets.toml`
+are gitignored.
 
-Get a key at <https://platform.openai.com/api-keys>. Never commit it.
+Get a key at <https://console.anthropic.com/settings/keys>. Never commit it.
 
 ---
 
 ## 3. Choose an embedding provider
 
-| | `openai` (default) | `local` |
+Anthropic has no embeddings endpoint, so retrieval is a separate vendor
+decision from the model that writes answers.
+
+| | `local` (default) | `openai` |
 |---|---|---|
-| Model | `text-embedding-3-small` | `all-MiniLM-L6-v2` |
-| Retrieval quality | Better, and handles non-English questions | Weaker outside English |
-| Cost | Per query **and** per reindex | Free |
-| Network | Required | None — fully offline |
-| Memory | Negligible | ~400 MB of torch + weights |
+| Model | `all-MiniLM-L6-v2` | `text-embedding-3-small` |
+| Second API key | None | `OPENAI_API_KEY` |
+| Retrieval quality | Weaker outside English | Better, and handles non-English questions |
+| Cost | Free | Per query **and** per reindex |
+| Network | None — fully offline | Required |
+| Memory | ~400 MB of torch + weights | Negligible |
 
 Set it in `.env`:
 
 ```bash
-EMBEDDING_PROVIDER=openai   # or: local
+EMBEDDING_PROVIDER=local   # or: openai
 ```
 
 **Changing this invalidates the index.** The two models put their vectors in
@@ -111,7 +119,8 @@ from whatever happened to be nearest.
 
 It is calibrated per provider **and** per knowledge base:
 
-- The built-in `local` value (1.49) was measured against the shipped KB.
+- The built-in `local` value (1.49) — the default — was measured against the
+  shipped KB.
 - The built-in `openai` value (1.35) is an **estimate**. It has not been
   measured against a real index, and the app says so in a banner until you set
   `MAX_DISTANCE` yourself.
@@ -169,10 +178,10 @@ it (§8).
 2. share.streamlit.io → **New app** → pick the repo, main file `app.py`.
 3. **Advanced settings → Secrets**:
    ```toml
-   OPENAI_API_KEY = "sk-..."
-   OPENAI_MODEL = "gpt-4o-mini"
-   EMBEDDING_PROVIDER = "openai"
-   MAX_DISTANCE = "1.28"
+   ANTHROPIC_API_KEY = "sk-ant-..."
+   ANTHROPIC_MODEL = "claude-opus-5"
+   EMBEDDING_PROVIDER = "local"
+   MAX_DISTANCE = "1.49"
    ```
 4. **Advanced settings → Python version**: pin it.
 5. **Settings → Sharing**: "Anyone with the link", or people just see a login page.

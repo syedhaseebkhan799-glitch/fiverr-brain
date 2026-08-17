@@ -40,7 +40,7 @@ SOURCE_TYPES = ("manual", "ocr")
 
 class _Model(BaseModel):
     # extra="forbid" is what makes pydantic emit `additionalProperties: false`,
-    # which OpenAI's strict structured-output mode requires.
+    # which Claude's structured-output mode requires.
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
@@ -422,13 +422,14 @@ def profile_status(profile: Optional[SellerProfile]) -> dict:
 
 # --- JSON schema for the vision model --------------------------------------
 
-# OpenAI's strict structured-output mode is a subset of JSON Schema: every
+# Claude's structured-output mode takes a subset of JSON Schema: every
 # property must be listed in `required`, `additionalProperties` must be false
-# on every object, and validation keywords it does not implement are rejected
-# outright. Optional fields stay expressible because pydantic renders them as
-# `anyOf: [..., {"type": "null"}]`, which strict mode does allow -- so "listed
-# as required" still means "may be null", which is exactly the behaviour the
-# brief asks for.
+# on every object, and validation keywords it does not implement (numeric and
+# string bounds, patterns) are not honoured, so they are stripped rather than
+# left in to imply a guarantee. Optional fields stay expressible because
+# pydantic renders them as `anyOf: [..., {"type": "null"}]`, which is allowed
+# -- so "listed as required" still means "may be null", which is exactly the
+# behaviour the brief asks for.
 _STRIPPED_KEYWORDS = {
     "default", "maxLength", "minLength", "maximum", "minimum",
     "exclusiveMaximum", "exclusiveMinimum", "maxItems", "minItems",

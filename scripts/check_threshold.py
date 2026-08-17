@@ -14,8 +14,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# No LLM calls here -- retrieval only. A placeholder key is enough to construct.
-os.environ.setdefault("OPENAI_API_KEY", "not-needed-for-retrieval")
+# No LLM calls here -- retrieval only. A placeholder key is enough to construct
+# the brain. (Embedding on the openai provider still needs a real OPENAI_API_KEY.)
+os.environ.setdefault("ANTHROPIC_API_KEY", "not-needed-for-retrieval")
 
 from src import config          # noqa: E402
 from src.rag import FiverrBrain  # noqa: E402

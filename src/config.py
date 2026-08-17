@@ -10,23 +10,36 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-# --- LLM settings (OpenAI) ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# --- LLM settings (Claude / Anthropic) ---
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
+
+# Effort controls how much the model thinks before answering, and so how much
+# it costs and how long the user waits. Answers here are short and grounded in
+# retrieved chunks, not open-ended reasoning, so "low" is the right default.
+LLM_EFFORT = os.getenv("LLM_EFFORT", "low")
 
 # --- Embeddings ---
-# Two providers, one switch:
+# Anthropic has no embeddings endpoint, so the vector half of the app is a
+# separate decision from the LLM. Two providers, one switch:
+#   "local"  -- all-MiniLM-L6-v2 via sentence-transformers. Free, offline, and
+#               what the committed index was built with, so the app works with
+#               nothing but an ANTHROPIC_API_KEY.
 #   "openai" -- text-embedding-3-small. Better retrieval, fixes the documented
-#               non-English weakness, costs money per query and per reindex.
-#   "local"  -- all-MiniLM-L6-v2 via sentence-transformers. Free, offline.
+#               non-English weakness, but needs a second (OpenAI) key and costs
+#               money per query and per reindex.
 # Changing this invalidates the existing index (rebuild required) AND the
 # relevance threshold below, which is calibrated per provider.
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "openai").strip().lower()
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local").strip().lower()
+
+# Only read when EMBEDDING_PROVIDER is "openai". The chat and vision paths do
+# not touch it.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 _DEFAULT_EMBEDDING_MODEL = {
     "openai": "text-embedding-3-small",
     "local": "all-MiniLM-L6-v2",
-}.get(EMBEDDING_PROVIDER, "text-embedding-3-small")
+}.get(EMBEDDING_PROVIDER, "all-MiniLM-L6-v2")
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", _DEFAULT_EMBEDDING_MODEL)
 
@@ -68,7 +81,14 @@ TOP_K = 5
 # and cap what comes back so long drafts aren't cut off mid-sentence.
 MAX_INPUT_CHARS = 8000      # per user message, before it reaches the prompt
 MAX_PROMPT_CHARS = 24000    # whole assembled prompt (~6k tokens)
-MAX_OUTPUT_TOKENS = 2000
+
+# What we want back as prose. Kept modest so a draft is a draft, not an essay.
+MAX_ANSWER_TOKENS = 2000
+# Claude's `max_tokens` caps thinking AND the visible answer together, so the
+# request needs headroom above the answer budget or a thinking-heavy turn gets
+# truncated mid-sentence and the user sees half a reply.
+THINKING_HEADROOM_TOKENS = 6000
+MAX_OUTPUT_TOKENS = MAX_ANSWER_TOKENS + THINKING_HEADROOM_TOKENS
 
 # Distance above which a retrieved chunk is treated as irrelevant. This is the
 # single value that makes "I don't know" possible, and it is calibrated per
@@ -91,7 +111,7 @@ MAX_DISTANCE_BY_PROVIDER = {
 }
 MAX_DISTANCE = float(
     os.getenv("MAX_DISTANCE")
-    or MAX_DISTANCE_BY_PROVIDER.get(EMBEDDING_PROVIDER, 1.35)
+    or MAX_DISTANCE_BY_PROVIDER.get(EMBEDDING_PROVIDER, 1.49)
 )
 
 # True while the active provider's threshold is the unmeasured estimate, so the
@@ -121,7 +141,11 @@ PROFILE_DB = PROJECT_ROOT / "data" / "fiverr_brain.sqlite3"
 # --- Screenshot OCR import ---
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_IMAGE_FORMATS = {"PNG", "JPEG", "WEBP", "GIF", "BMP"}
-VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o-mini")
+VISION_MODEL = os.getenv("VISION_MODEL", "claude-opus-5")
+
+# Reading a layout off a screenshot is worth more thought than answering from
+# retrieved text, so this sits a step above LLM_EFFORT.
+VISION_EFFORT = os.getenv("VISION_EFFORT", "medium")
 
 # Below this share of populated fields, an extraction is reported as
 # low-confidence and the user is sent to the manual form instead of saving

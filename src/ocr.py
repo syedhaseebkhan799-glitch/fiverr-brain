@@ -2,7 +2,7 @@
 Screenshot import: a Fiverr gig or profile screenshot in, structured profile
 data out.
 
-The extraction is done by the OpenAI vision model, not by a local OCR engine.
+The extraction is done by Claude's vision, not by a local OCR engine.
 Tesseract would give back a bag of words in reading order; what this needs is
 the *structure* -- which number is the Standard price and which is the delivery
 time -- and that is a job for a model that can read a layout.
@@ -29,14 +29,7 @@ import io
 import json
 from typing import List, Optional, Tuple
 
-from openai import (
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    AuthenticationError,
-    OpenAI,
-    RateLimitError,
-)
+import anthropic
 
 from . import config
 from .schema import ScreenshotReading, SellerProfile, ocr_json_schema
@@ -140,8 +133,9 @@ def prepare_upload(data: bytes, filename: str = "") -> bytes:
     return strip_exif(data)
 
 
-def to_data_url(png_bytes: bytes) -> str:
-    return "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+def to_base64(png_bytes: bytes) -> str:
+    """The image as Claude wants it: bare base64, no data-URL prefix."""
+    return base64.b64encode(png_bytes).decode("ascii")
 
 
 # --- Confidence -------------------------------------------------------------
@@ -218,52 +212,67 @@ def extract(image_bytes: bytes, filename: str = "", client=None
     png = prepare_upload(image_bytes, filename)
 
     if client is None:
-        if not config.OPENAI_API_KEY:
+        if not config.ANTHROPIC_API_KEY:
             raise OCRError(
-                "OPENAI_API_KEY is not set, so the screenshot cannot be read. "
-                "Add it to your .env file or Streamlit Secrets."
+                "ANTHROPIC_API_KEY is not set, so the screenshot cannot be "
+                "read. Add it to your .env file or Streamlit Secrets."
             )
-        client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=120.0)
+        client = anthropic.Anthropic(
+            api_key=config.ANTHROPIC_API_KEY, timeout=120.0
+        )
 
     try:
-        response = client.chat.completions.create(
+        response = client.messages.create(
             model=config.VISION_MODEL,
             max_tokens=config.MAX_OUTPUT_TOKENS,
+            # The schema is the contract: the reply is shaped by construction,
+            # so nothing downstream has to parse hopefully.
+            output_config={
+                "effort": config.VISION_EFFORT,
+                "format": {"type": "json_schema", "schema": ocr_json_schema()},
+            },
             messages=[{
                 "role": "user",
+                # Image first, then the instruction -- the model reads the
+                # picture better when it is not answering a question it has
+                # already been asked.
                 "content": [
+                    {"type": "image",
+                     "source": {"type": "base64", "media_type": "image/png",
+                                "data": to_base64(png)}},
                     {"type": "text", "text": EXTRACTION_PROMPT},
-                    {"type": "image_url",
-                     "image_url": {"url": to_data_url(png), "detail": "high"}},
                 ],
             }],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "screenshot_reading",
-                    "strict": True,
-                    "schema": ocr_json_schema(),
-                },
-            },
         )
-    except AuthenticationError:
-        raise OCRError("Your OpenAI API key was rejected. Check OPENAI_API_KEY.")
-    except RateLimitError:
+    except anthropic.AuthenticationError:
         raise OCRError(
-            "OpenAI rate limit or quota hit. Wait a moment and retry, or check "
-            "your billing at platform.openai.com/usage."
+            "Your Anthropic API key was rejected. Check ANTHROPIC_API_KEY."
         )
-    except APITimeoutError:
+    except anthropic.RateLimitError:
+        raise OCRError(
+            "Anthropic rate limit or quota hit. Wait a moment and retry, or "
+            "check your usage at console.anthropic.com."
+        )
+    except anthropic.APITimeoutError:
         raise OCRError(
             "Reading the screenshot timed out. Try a smaller or simpler image."
         )
-    except APIConnectionError:
-        raise OCRError("Could not reach OpenAI. Check your connection and retry.")
-    except APIError as e:
-        raise OCRError(f"OpenAI returned an error while reading the image: {e}")
+    except anthropic.APIConnectionError:
+        raise OCRError("Could not reach Anthropic. Check your connection and retry.")
+    except anthropic.APIError as e:
+        raise OCRError(f"Anthropic returned an error while reading the image: {e}")
 
-    content = response.choices[0].message.content
-    if not content or not content.strip():
+    if response.stop_reason == "refusal":
+        raise OCRError(
+            "Claude declined to read that image, so nothing was extracted. "
+            "Upload a different Fiverr screenshot, or enter the profile "
+            "manually."
+        )
+
+    content = "".join(
+        block.text for block in response.content if block.type == "text"
+    )
+    if not content.strip():
         raise OCRError(
             "The model returned nothing for that screenshot. Try a clearer or "
             "less cropped image."

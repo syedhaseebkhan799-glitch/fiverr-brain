@@ -10,6 +10,7 @@ an oversized or non-image upload is refused before anything is sent, that
 location metadata never leaves the machine, and that a mostly-empty extraction
 is reported rather than quietly saved as a profile.
 """
+import base64
 import io
 import json
 
@@ -89,22 +90,29 @@ def reading(profile, is_fiverr=True, shows="A Fiverr seller profile"):
 
 
 class FakeVisionClient:
-    """Stands in for the OpenAI client. Records what it was sent."""
+    """Stands in for the Anthropic client. Records what it was sent."""
 
-    def __init__(self, payload, raise_exc=None):
+    def __init__(self, payload, raise_exc=None, stop_reason="end_turn"):
         self.payload = payload
         self.raise_exc = raise_exc
+        self.stop_reason = stop_reason
         self.seen = {}
-        self.chat = type("Chat", (), {"completions": self})()
+        self.messages = self
 
     def create(self, **kwargs):
         self.seen = kwargs
         if self.raise_exc:
             raise self.raise_exc
-        content = self.payload if isinstance(self.payload, str) \
+        text = self.payload if isinstance(self.payload, str) \
             else json.dumps(self.payload)
-        message = type("M", (), {"content": content})()
-        return type("R", (), {"choices": [type("C", (), {"message": message})()]})()
+        # A real reply is a list of typed blocks; only the text ones carry the
+        # JSON, which is why extract() filters on .type rather than taking [0].
+        blocks = [
+            type("B", (), {"type": "thinking", "thinking": ""})(),
+            type("B", (), {"type": "text", "text": text})(),
+        ]
+        return type("R", (), {"content": blocks,
+                              "stop_reason": self.stop_reason})()
 
 
 # --- Upload limits ----------------------------------------------------------
@@ -191,13 +199,16 @@ def test_prepare_upload_validates_before_stripping():
         ocr.prepare_upload(b"not an image at all", "x.png")
 
 
-def test_the_image_is_sent_as_a_base64_data_url():
+def test_the_image_is_sent_as_base64_png():
     client = FakeVisionClient(reading(EXTRACTED))
     ocr.extract(make_image(), "shot.png", client=client)
 
     content = client.seen["messages"][0]["content"]
-    image_part = next(p for p in content if p["type"] == "image_url")
-    assert image_part["image_url"]["url"].startswith("data:image/png;base64,")
+    image_part = next(p for p in content if p["type"] == "image")
+    assert image_part["source"]["type"] == "base64"
+    assert image_part["source"]["media_type"] == "image/png"
+    # The EXIF-stripped PNG, not the original upload.
+    assert base64.b64decode(image_part["source"]["data"]).startswith(b"\x89PNG")
 
 
 # --- Extraction -------------------------------------------------------------
@@ -223,10 +234,9 @@ def test_the_request_binds_the_reply_to_the_shared_schema():
     client = FakeVisionClient(reading(EXTRACTED))
     ocr.extract(make_image(), "shot.png", client=client)
 
-    fmt = client.seen["response_format"]
+    fmt = client.seen["output_config"]["format"]
     assert fmt["type"] == "json_schema"
-    assert fmt["json_schema"]["strict"] is True
-    assert fmt["json_schema"]["schema"] == ocr.ocr_json_schema()
+    assert fmt["schema"] == ocr.ocr_json_schema()
 
 
 def test_the_prompt_forbids_inventing_values():
@@ -257,13 +267,25 @@ def test_json_that_does_not_match_the_schema_is_refused():
 
 
 def test_api_errors_become_readable_messages():
-    import openai
+    import anthropic
+    import httpx
 
-    response = type("R", (), {"status_code": 429, "headers": {}, "request": None})()
-    exc = openai.RateLimitError("boom", response=response, body=None)
+    response = httpx.Response(
+        429, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    exc = anthropic.RateLimitError("boom", response=response, body=None)
     with pytest.raises(ocr.OCRError, match="rate limit"):
         ocr.extract(make_image(), "shot.png",
                     client=FakeVisionClient(reading(EXTRACTED), raise_exc=exc))
+
+
+def test_a_declined_image_is_an_error_not_an_empty_profile():
+    """A safety decline comes back as a normal 200 with no text, so reading
+    the blocks without checking stop_reason first would look like a blank
+    extraction rather than a refusal."""
+    client = FakeVisionClient("", stop_reason="refusal")
+    with pytest.raises(ocr.OCRError, match="declined"):
+        ocr.extract(make_image(), "shot.png", client=client)
 
 
 # --- The Fiverr gate ----------------------------------------------------------

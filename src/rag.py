@@ -1,19 +1,12 @@
 """
 Core RAG logic: embed the question, retrieve top matching chunks from
-ChromaDB, build a grounded prompt, and call OpenAI for the answer.
+ChromaDB, build a grounded prompt, and call Claude for the answer.
 """
 import re
 from pathlib import Path
 
+import anthropic
 import chromadb
-from openai import (
-    OpenAI,
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    AuthenticationError,
-    RateLimitError,
-)
 
 from . import config
 
@@ -98,6 +91,11 @@ class OpenAIEmbedder:
     which provider is active. Unlike the local model this one costs money and
     can fail on the network, so failures are turned into a message a user can
     act on rather than a raw SDK exception surfacing mid-rebuild.
+
+    This is the one place OpenAI is still used: Anthropic has no embeddings
+    endpoint, so a cloud embedding provider means a second vendor. The import
+    is local to the class so the openai package is only needed by whoever
+    actually opts into this provider.
     """
 
     # The endpoint accepts many inputs per call; batching keeps a full reindex
@@ -111,10 +109,26 @@ class OpenAIEmbedder:
                 "Add the key, or set EMBEDDING_PROVIDER=local in your .env to "
                 "use the free offline model."
             )
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise EmbeddingError(
+                "EMBEDDING_PROVIDER is 'openai' but the openai package is not "
+                "installed. Run `pip install openai`, or set "
+                "EMBEDDING_PROVIDER=local to use the free offline model."
+            )
         self.model = model
         self._client = OpenAI(api_key=api_key, timeout=60.0)
 
     def encode(self, texts, show_progress_bar: bool = False, **_):
+        from openai import (
+            APIConnectionError,
+            APIError,
+            APITimeoutError,
+            AuthenticationError,
+            RateLimitError,
+        )
+
         if isinstance(texts, str):
             texts = [texts]
         texts = [t if str(t).strip() else " " for t in texts]
@@ -195,12 +209,14 @@ class LLMError(RuntimeError):
 
 class FiverrBrain:
     def __init__(self):
-        if not config.OPENAI_API_KEY:
+        if not config.ANTHROPIC_API_KEY:
             raise RuntimeError(
-                "OPENAI_API_KEY is not set. Add it to your .env file "
+                "ANTHROPIC_API_KEY is not set. Add it to your .env file "
                 "(local) or to the app's Secrets (Streamlit Cloud)."
             )
-        self.client_llm = OpenAI(api_key=config.OPENAI_API_KEY, timeout=60.0)
+        self.client_llm = anthropic.Anthropic(
+            api_key=config.ANTHROPIC_API_KEY, timeout=60.0
+        )
         self.embed_model = get_embed_model()
         self.client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
         self.collection = self.client.get_or_create_collection(config.COLLECTION_NAME)
@@ -264,35 +280,49 @@ class FiverrBrain:
     def _call_llm(self, prompt: str) -> str:
         prompt = _truncate(prompt, config.MAX_PROMPT_CHARS)
         try:
-            response = self.client_llm.chat.completions.create(
-                model=config.OPENAI_MODEL,
+            response = self.client_llm.messages.create(
+                model=config.ANTHROPIC_MODEL,
                 max_tokens=config.MAX_OUTPUT_TOKENS,
-                messages=[
-                    {"role": "system", "content": config.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
+                # Adaptive thinking is on by default on this model family;
+                # naming it keeps the behaviour explicit rather than implied,
+                # and effort is what actually holds cost and latency down.
+                thinking={"type": "adaptive"},
+                output_config={"effort": config.LLM_EFFORT},
+                system=config.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
             )
-        except AuthenticationError:
+        except anthropic.AuthenticationError:
             raise LLMError(
-                "Your OpenAI API key was rejected. Check OPENAI_API_KEY in "
-                "your .env file / Streamlit Secrets."
+                "Your Anthropic API key was rejected. Check ANTHROPIC_API_KEY "
+                "in your .env file / Streamlit Secrets."
             )
-        except RateLimitError:
+        except anthropic.RateLimitError:
             raise LLMError(
-                "OpenAI rate limit or quota hit. Wait a moment and retry, or "
-                "check your billing at platform.openai.com/usage."
+                "Anthropic rate limit or quota hit. Wait a moment and retry, "
+                "or check your usage at console.anthropic.com."
             )
-        except APITimeoutError:
-            raise LLMError("OpenAI took too long to respond. Please try again.")
-        except APIConnectionError:
+        except anthropic.APITimeoutError:
+            raise LLMError("Claude took too long to respond. Please try again.")
+        except anthropic.APIConnectionError:
             raise LLMError(
-                "Could not reach OpenAI. Check your internet connection and retry."
+                "Could not reach Anthropic. Check your internet connection "
+                "and retry."
             )
-        except APIError as e:
-            raise LLMError(f"OpenAI returned an error: {e}")
+        except anthropic.APIError as e:
+            raise LLMError(f"Anthropic returned an error: {e}")
 
-        content = response.choices[0].message.content
-        if not content or not content.strip():
+        # A safety decline arrives as a normal 200 with empty content, so it
+        # has to be read off stop_reason before anything touches the blocks.
+        if response.stop_reason == "refusal":
+            raise LLMError(
+                "Claude declined to answer that one. Rephrase the request, or "
+                "check the pasted text for anything that reads as off-limits."
+            )
+
+        content = "".join(
+            block.text for block in response.content if block.type == "text"
+        )
+        if not content.strip():
             raise LLMError(
                 "The model returned an empty response. Try rephrasing your input."
             )

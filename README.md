@@ -10,9 +10,10 @@ bio, skills, gigs with their three pricing packages, portfolio and reviews —
 or a screenshot of a Fiverr page, read by a vision model and shown to you for
 checking before anything is saved.
 
-Vector store is ChromaDB, running locally and free. Embeddings default to
-OpenAI `text-embedding-3-small`, with a free offline model one line away. The
-LLM is `gpt-4o-mini` — fractions of a cent per question.
+Vector store is ChromaDB, running locally and free. The LLM and the vision
+model are both Claude (`claude-opus-5` by default, via the Anthropic API).
+Embeddings default to a free offline model, because Anthropic has no
+embeddings endpoint — OpenAI's is one line away if you want it.
 
 > **Full setup instructions: [`docs/SETUP.md`](docs/SETUP.md).** The sections
 > below are the short version plus the operational details worth knowing.
@@ -26,15 +27,19 @@ source venv/bin/activate      # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 2. Add your OpenAI API key
+## 2. Add your Anthropic API key
 
-1. Go to https://platform.openai.com/api-keys → "Create new secret key".
+1. Go to https://console.anthropic.com/settings/keys → "Create Key".
 2. Copy the key.
 3. Copy `.env.example` to `.env`:
    ```bash
    cp .env.example .env
    ```
-4. Open `.env` and paste your key after `OPENAI_API_KEY=`.
+4. Open `.env` and paste your key after `ANTHROPIC_API_KEY=`.
+
+That is the only key the app needs. An `OPENAI_API_KEY` is required *only* if
+you switch `EMBEDDING_PROVIDER` to `openai` (see §6) — Claude handles every
+answer and every screenshot either way.
 
 **Never commit or share your real `.env` file or API key.**
 
@@ -110,19 +115,22 @@ shared, because they belong to the business rather than to one seller.
 
 ### Embeddings: which provider, and what it costs
 
-`EMBEDDING_PROVIDER` in `.env` picks one of two:
+Anthropic has no embeddings endpoint, so this is a separate decision from the
+model that writes answers. `EMBEDDING_PROVIDER` in `.env` picks one of two:
 
-| | `openai` (default) | `local` |
+| | `local` (default) | `openai` |
 |---|---|---|
-| Model | `text-embedding-3-small` | `all-MiniLM-L6-v2` |
-| Non-English questions | Handled well | Poor — 4/7 on a cross-language test of this KB |
-| Cost | Per query **and** per reindex | Free |
-| Network | Required | None |
-| Memory | Negligible | ~400 MB of torch + weights |
+| Model | `all-MiniLM-L6-v2` | `text-embedding-3-small` |
+| Second API key | None | `OPENAI_API_KEY` |
+| Non-English questions | Poor — 4/7 on a cross-language test of this KB | Handled well |
+| Cost | Free | Per query **and** per reindex |
+| Network | None | Required |
+| Memory | ~400 MB of torch + weights | Negligible |
 
-The default switched to OpenAI because the local model's non-English weakness
-was a real, measured limitation. `local` remains fully supported and is what
-the test suite runs on.
+`local` is the default because it keeps the app to a single vendor and a single
+key, and it is what the committed index and the test suite both run on. Switch
+to `openai` if non-English retrieval matters more than the second key — that
+weakness is real and measured.
 
 **Reindex after changing this** — `python scripts/reindex.py`. A mismatch
 produces no error; retrieval just silently returns nothing. The app stamps the
@@ -135,7 +143,8 @@ disagree with the current settings.
 makes "I don't know" possible at all. It is calibrated **per provider and per
 knowledge base**:
 
-- The `local` default (1.49) was measured against the shipped KB.
+- The `local` default (1.49) — the one in force out of the box — was measured
+  against the shipped KB.
 - The `openai` default (1.35) is an **estimate**. It has never been measured
   against a real index. The app says so in a banner until you set it yourself.
 
@@ -155,8 +164,8 @@ from irrelevant chunks. Too low → it says "I don't know" to real questions.
 2. On share.streamlit.io → **New app** → pick the repo, main file `app.py`.
 3. **Advanced settings → Secrets**, paste:
    ```toml
-   OPENAI_API_KEY = "sk-..."
-   OPENAI_MODEL = "gpt-4o-mini"
+   ANTHROPIC_API_KEY = "sk-ant-..."
+   ANTHROPIC_MODEL = "claude-opus-5"
    ```
 4. **Advanced settings → Python version**: pin it (3.12 is a safe choice).
    Leaving it unset means a platform default change can break the `torch` install.
@@ -182,9 +191,9 @@ pip install pytest
 python -m pytest tests/ -q
 ```
 
-210 tests. The original 57 each map to a bug that was actually present in the
+228 tests. The original 57 each map to a bug that was actually present in the
 app: relevance thresholding, follow-up vs topic-change retrieval, mode return
-contracts, prompt-injection fencing, OpenAI error handling, atomic reindexing,
+contracts, prompt-injection fencing, API error handling, atomic reindexing,
 concurrent rebuild locking, embedding-model/index mismatch, path traversal and
 log robustness. The rest cover the profile schema and its SQLite round trip,
 document splitting and per-seller upsert, seller isolation, citations, the

@@ -63,12 +63,12 @@ def test_a_missing_api_key_is_an_actionable_message_not_a_traceback(monkeypatch)
     # load_brain is @st.cache_resource, and the cache outlives a single
     # AppTest run -- without clearing it the app would reuse the brain another
     # test already built and never reach the missing-key branch.
-    monkeypatch.setattr(config, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
     st.cache_resource.clear()
     try:
         at = run_app()
         assert_no_exceptions(at)
-        assert any("OPENAI_API_KEY" in e.value for e in at.error)
+        assert any("ANTHROPIC_API_KEY" in e.value for e in at.error)
     finally:
         st.cache_resource.clear()
 
