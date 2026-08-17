@@ -194,6 +194,7 @@ with st.sidebar:
     # Appearance sits with the rail's other quiet controls, above the account
     # card. Flipping it reruns the script, and theme.inject() at the top of the
     # file has already run with the new value by then.
+    theme.section("Appearance")
     theme.switch()
 
     st.divider()

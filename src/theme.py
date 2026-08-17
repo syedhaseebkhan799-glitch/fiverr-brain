@@ -132,11 +132,17 @@ FONT_STACK = (
 )
 DISPLAY_STACK = 'Georgia, "Times New Roman", serif'
 
-# The switch's state. It is the widget's own key, so Streamlit keeps it across
-# reruns and the callback below only has to mirror it into the URL.
-_KEY = "stl_theme_light"
-_QUERY_KEY = "theme"
+# The switch's state, and -- because the widget is bound to the query string --
+# also the name of the URL parameter that carries it: `?theme=light`.
+_KEY = "theme"
 _INJECTED = "_stl_theme_injected"
+
+# Icon plus word, so the control reads at a glance and still says which is
+# which. Material Symbols rather than emoji, for the reason BRAND_MARK gives.
+_LABELS = {
+    "dark": ":material/dark_mode: Dark",
+    "light": ":material/light_mode: Light",
+}
 
 
 # --- Which appearance are we in? --------------------------------------------
@@ -147,11 +153,15 @@ def _detected() -> str:
     `?theme=` in the URL (a reader's own choice, surviving a refresh), then
     what Streamlit rendered for the reader's system preference, then dark.
 
+    The URL is read here as well as by the bound widget because `inject()` runs
+    at the top of the script, before the switch exists -- on the first run of a
+    session there is no widget state yet, and this is what stands in for it.
+
     `st.context` needs a live script run, so this is wrapped: importing the
     module or calling it from a test must not raise.
     """
     try:
-        wanted = str(st.query_params.get(_QUERY_KEY, "")).lower()
+        wanted = str(st.query_params.get(_KEY, "")).lower()
         if wanted in MODES:
             return wanted
     except Exception:
@@ -171,10 +181,18 @@ def _detected() -> str:
 
 
 def mode() -> str:
-    """The active appearance: `"dark"` or `"light"`. Never anything else."""
-    if _KEY not in st.session_state:
-        st.session_state[_KEY] = _detected() == "light"
-    return "light" if st.session_state[_KEY] else "dark"
+    """
+    The active appearance: `"dark"` or `"light"`. Never anything else.
+
+    Read from the switch's own state once it exists, and from `_detected()`
+    before that -- so `inject()` at the top of the script and the switch drawn
+    later in the rail always agree, including on the rerun that a click causes
+    (widget state is updated before the script runs again).
+    """
+    chosen = st.session_state.get(_KEY)
+    if chosen in MODES:
+        return chosen
+    return _detected()
 
 
 def palette() -> dict:
@@ -184,33 +202,42 @@ def palette() -> dict:
 
 def _remember():
     """
-    Mirror the switch into the URL so a refresh keeps the reader's choice.
+    Mirror the choice into the URL so a refresh keeps it.
 
-    Runs as the switch's `on_change`, where `st.session_state[_KEY]` is already
-    the new value. Query params are cosmetic here, so a failure to write one is
-    swallowed: the theme still applies, it just would not survive a reload.
+    Runs as the switch's `on_change`, where the widget's state is already the
+    new value. The URL is a convenience, not the source of truth, so a failure
+    to write it is swallowed: the theme still applies for this session.
     """
     try:
-        st.query_params[_QUERY_KEY] = mode()
+        st.query_params[_KEY] = mode()
     except Exception:
         pass
 
 
-def switch(label_visibility: str = "visible"):
+def switch(label_visibility: str = "collapsed"):
     """
-    The appearance switch, for the rail.
+    The appearance switch: two chips, the active one lit, in the rail.
 
-    A toggle rather than a two-chip control on purpose: a toggle cannot be
-    empty, so there is no "neither" state to interpret, and it is not a
-    `radiogroup` -- which the nav rules below claim wholesale.
+    `required=True` is what makes it a switch rather than a filter -- without
+    it, clicking the lit chip clears the selection and the control has a third,
+    meaningless state to interpret.
+
+    The URL is written by hand rather than with `bind="query-params"`, which
+    puts the *formatted* label in the parameter -- `?theme=:material/light_mode:
+    Light` -- and that is both ugly and unreadable to `_detected()`, which is
+    what paints the first frame of a reloaded page.
     """
-    on = mode() == "light"   # also seeds `_KEY` on the first run
-    st.toggle(
-        ":material/light_mode: Light mode" if on else ":material/dark_mode: Dark mode",
+    st.segmented_control(
+        "Appearance",
+        MODES,
         key=_KEY,
+        default=_detected(),
+        required=True,
+        format_func=lambda m: _LABELS.get(m, m),
         on_change=_remember,
         help="Switch between the light and dark appearance.",
         label_visibility=label_visibility,
+        width="stretch",
     )
 
 
@@ -378,9 +405,56 @@ label {{ color: var(--stl-text); }}
   font-size: 0.92rem; color: var(--stl-muted);
 }}
 
-/* The appearance switch, sitting where the rail's quiet controls live. */
-.st-key-{_KEY} {{ margin: 2px 0 6px 0; }}
-.st-key-{_KEY} label p {{ font-size: 0.84rem; color: var(--stl-muted); }}
+/* The appearance switch: two chips in a sunken pill, the active one lifted out
+   of it. Streamlit's own segmented control is a row of separate buttons, so the
+   pill is the group's background and the gap between chips is closed. */
+.st-key-{_KEY} [data-testid="stButtonGroup"] {{
+  background: var(--stl-raised);
+  border: 1px solid var(--stl-border);
+  border-radius: 9px;
+  padding: 3px;
+  gap: 3px;
+  width: 100%;
+}}
+.st-key-{_KEY} [data-testid="stButtonGroup"] > div {{ flex: 1 1 0; }}
+/* The chips are react-aria radios. Named by `data-variant` so the group's
+   zero-sized help button is left out of the chip styling. */
+.st-key-{_KEY} button[data-variant="segmented_control"] {{
+  width: 100%;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 7px !important;
+  color: var(--stl-muted) !important;
+  box-shadow: none !important;
+  padding: 4px 6px !important;
+  min-height: 0 !important;
+  transition: background 0.12s ease, color 0.12s ease;
+}}
+.st-key-{_KEY} button p {{ font-size: 0.8rem !important; font-weight: 550; }}
+.st-key-{_KEY} button [data-testid="stIconMaterial"] {{ font-size: 1rem !important; }}
+
+/* The label's colour is stated on the text as well as on the chip. `inherit`
+   is no use here: the `p` sits inside a markdown container that this stylesheet
+   has already given a colour of its own, so it would inherit that instead. */
+.st-key-{_KEY} button[data-variant="segmented_control"] p,
+.st-key-{_KEY} button[data-variant="segmented_control"] [data-testid="stIconMaterial"] {{
+  color: var(--stl-muted) !important;
+}}
+.st-key-{_KEY} button[data-variant="segmented_control"]:hover p,
+.st-key-{_KEY} button[data-variant="segmented_control"]:hover [data-testid="stIconMaterial"] {{
+  color: var(--stl-text) !important;
+}}
+/* The lit chip: matched on the state the control itself reports, so a screen
+   reader and the eye are told the same thing. */
+.st-key-{_KEY} button[aria-checked="true"] {{
+  background: var(--stl-card) !important;
+  border-color: var(--stl-accent-line) !important;
+  box-shadow: var(--stl-shadow) !important;
+}}
+.st-key-{_KEY} button[aria-checked="true"] p,
+.st-key-{_KEY} button[aria-checked="true"] [data-testid="stIconMaterial"] {{
+  color: var(--stl-accent) !important;
+}}
 
 /* --- Panels ------------------------------------------------------------- */
 
