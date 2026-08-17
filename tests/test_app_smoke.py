@@ -265,6 +265,43 @@ def test_the_import_review_screen_renders_an_extraction(kb):
     assert any("Check what was read" in h.value for h in at.subheader)
 
 
+def test_an_accepted_extraction_reaches_the_wizard_and_saves(kb):
+    """The whole point of the import: screenshot data has to survive the trip
+    into the form and out to the database. Every step between the review screen
+    and a stored profile is exercised here -- the button, the mode handoff, the
+    wizard loading extracted values into its widgets, and the save."""
+    from src import ocr, ocr_ui
+
+    profile = seeded_profile("handoff_seller")
+    profile.source_type = "ocr"
+    at = run_app(**{
+        "mode": "🖼️ Import from screenshot",
+        ocr_ui.EXTRACTED_KEY: profile,
+        ocr_ui.REPORT_KEY: ocr.confidence_report(profile),
+        ocr_ui.FILENAME_KEY: "screenshot.png",
+    })
+    assert_no_exceptions(at)
+
+    open_in_form = next(b for b in at.button if "profile form" in b.label)
+    at = open_in_form.click().run()
+    assert_no_exceptions(at)
+
+    # Landed in the wizard, and the review screen let go of the extraction.
+    assert at.session_state["mode"] == "👤 Profile onboarding"
+    assert ocr_ui.EXTRACTED_KEY not in at.session_state
+
+    # The extracted values are what the form is now holding, not a blank draft.
+    draft, _ = ps.load_draft()
+    assert draft is not None, "the extraction did not survive into a draft"
+    assert draft.basic.name == "Smoke Tester"
+    assert draft.gigs[0].title == "I will build a workflow"
+
+    # And that draft is a real profile the store accepts, not a shape that only
+    # holds together until someone presses save.
+    seller_id = ps.save_profile(draft)
+    assert store.load_seller(seller_id).basic.name == "Smoke Tester"
+
+
 def test_a_low_confidence_extraction_says_so_rather_than_offering_a_save(kb):
     from src import ocr, ocr_ui
 
