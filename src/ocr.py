@@ -9,8 +9,10 @@ time -- and that is a job for a model that can read a layout.
 
 Three things make the output trustworthy enough to show a user:
 
-  1. The response is bound to `SellerProfile`'s own JSON schema, so the reply is
-     shaped correctly by construction rather than by hopeful parsing.
+  1. The response is bound to `SellerProfile`'s own JSON schema, handed over as
+     a tool the model must call, and then validated against those same models
+     before anything is returned -- so the reply arrives as structured data
+     rather than as prose someone has to parse hopefully.
   2. The prompt requires `null` for anything not visible and forbids inference.
      A screenshot of one gig genuinely does not show the seller's country.
   3. Nothing is ever saved from here directly. The caller gets the parsed model
@@ -26,13 +28,16 @@ freelance platform) raises `NotFiverrError` and nothing is extracted.
 """
 import base64
 import io
-import json
 from typing import List, Optional, Tuple
 
 import anthropic
 
 from . import config
 from .schema import ScreenshotReading, SellerProfile, ocr_json_schema
+
+# The tool the model is forced to call. Named for what it records, not for the
+# act of extracting, so the schema reads as the shape of an answer.
+TOOL_NAME = "record_screenshot_reading"
 
 EXTRACTION_PROMPT = """You are reading a screenshot and extracting what it shows
 into structured data — but ONLY if the screenshot is from Fiverr.
@@ -225,12 +230,21 @@ def extract(image_bytes: bytes, filename: str = "", client=None
         response = client.messages.create(
             model=config.VISION_MODEL,
             max_tokens=config.MAX_OUTPUT_TOKENS,
-            # The schema is the contract: the reply is shaped by construction,
-            # so nothing downstream has to parse hopefully.
-            output_config={
-                "effort": config.VISION_EFFORT,
-                "format": {"type": "json_schema", "schema": ocr_json_schema()},
-            },
+            output_config={"effort": config.VISION_EFFORT},
+            # The schema is the contract, handed over as a tool the model is
+            # forced to call. The obvious route -- output_config.format -- is
+            # not available here: that mode compiles the schema into a grammar,
+            # and a full seller profile (nested gigs, packages, FAQs, reviews,
+            # all unbounded lists) compiles too large and the API rejects the
+            # request outright. A tool schema is not compiled, so the same
+            # shared models still shape the reply, with `ScreenshotReading`
+            # below as the check rather than the guarantee.
+            tools=[{
+                "name": TOOL_NAME,
+                "description": "Record what this screenshot shows.",
+                "input_schema": ocr_json_schema(),
+            }],
+            tool_choice={"type": "tool", "name": TOOL_NAME},
             messages=[{
                 "role": "user",
                 # Image first, then the instruction -- the model reads the
@@ -269,21 +283,16 @@ def extract(image_bytes: bytes, filename: str = "", client=None
             "manually."
         )
 
-    content = "".join(
-        block.text for block in response.content if block.type == "text"
+    # Forced tool_choice means the reply should be a single tool call, already
+    # parsed into a dict by the SDK. Anything else is a reply we cannot import.
+    payload = next(
+        (block.input for block in response.content if block.type == "tool_use"),
+        None,
     )
-    if not content.strip():
+    if not payload:
         raise OCRError(
             "The model returned nothing for that screenshot. Try a clearer or "
             "less cropped image."
-        )
-
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        raise OCRError(
-            "The model's reply was not valid JSON, so nothing was imported. "
-            "Retry, or enter the profile manually."
         )
 
     try:

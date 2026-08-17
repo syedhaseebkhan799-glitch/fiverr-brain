@@ -12,7 +12,6 @@ is reported rather than quietly saved as a profile.
 """
 import base64
 import io
-import json
 
 import pytest
 
@@ -103,14 +102,13 @@ class FakeVisionClient:
         self.seen = kwargs
         if self.raise_exc:
             raise self.raise_exc
-        text = self.payload if isinstance(self.payload, str) \
-            else json.dumps(self.payload)
-        # A real reply is a list of typed blocks; only the text ones carry the
-        # JSON, which is why extract() filters on .type rather than taking [0].
-        blocks = [
-            type("B", (), {"type": "thinking", "thinking": ""})(),
-            type("B", (), {"type": "text", "text": text})(),
-        ]
+        # A real reply is a list of typed blocks. Under forced tool_choice the
+        # payload rides in a tool_use block's already-parsed `input`, which is
+        # why extract() filters on .type rather than taking content[0].
+        blocks = [type("B", (), {"type": "thinking", "thinking": ""})()]
+        if self.payload is not None:
+            blocks.append(type("B", (), {"type": "tool_use",
+                                         "input": self.payload})())
         return type("R", (), {"content": blocks,
                               "stop_reason": self.stop_reason})()
 
@@ -234,9 +232,20 @@ def test_the_request_binds_the_reply_to_the_shared_schema():
     client = FakeVisionClient(reading(EXTRACTED))
     ocr.extract(make_image(), "shot.png", client=client)
 
-    fmt = client.seen["output_config"]["format"]
-    assert fmt["type"] == "json_schema"
-    assert fmt["schema"] == ocr.ocr_json_schema()
+    tool = client.seen["tools"][0]
+    assert tool["input_schema"] == ocr.ocr_json_schema()
+    # Forced, or the model is free to answer in prose instead.
+    assert client.seen["tool_choice"] == {"type": "tool", "name": tool["name"]}
+
+
+def test_the_schema_is_not_sent_as_a_compiled_output_format():
+    """A full seller profile compiles to a grammar the API rejects outright
+    ("the compiled grammar is too large"). The tool schema is the route that
+    survives it, so output_config must not carry a format again."""
+    client = FakeVisionClient(reading(EXTRACTED))
+    ocr.extract(make_image(), "shot.png", client=client)
+
+    assert "format" not in client.seen.get("output_config", {})
 
 
 def test_the_prompt_forbids_inventing_values():
@@ -249,15 +258,17 @@ def test_the_prompt_forbids_inventing_values():
     assert "never infer, guess, complete or invent" in text
 
 
-def test_malformed_json_is_an_error_not_a_half_import():
-    with pytest.raises(ocr.OCRError, match="not valid JSON"):
-        ocr.extract(make_image(), "shot.png",
-                    client=FakeVisionClient("{not json at all"))
+def test_a_reply_with_no_tool_call_is_an_error_not_a_half_import():
+    """If the model answers in prose instead of calling the tool there is no
+    structured data to import, and inventing an empty profile would look like
+    a bad extraction rather than a failed one."""
+    with pytest.raises(ocr.OCRError, match="returned nothing"):
+        ocr.extract(make_image(), "shot.png", client=FakeVisionClient(None))
 
 
 def test_an_empty_reply_is_an_error():
     with pytest.raises(ocr.OCRError, match="returned nothing"):
-        ocr.extract(make_image(), "shot.png", client=FakeVisionClient(""))
+        ocr.extract(make_image(), "shot.png", client=FakeVisionClient({}))
 
 
 def test_json_that_does_not_match_the_schema_is_refused():
