@@ -784,6 +784,61 @@ label {{ color: var(--stl-text); }}
   color: var(--stl-muted); text-transform: uppercase;
   margin: 2px 0 6px 2px;
 }}
+
+/* --- Phones ------------------------------------------------------------- */
+/* Streamlit collapses the rail behind a hamburger on a narrow screen and
+   leaves everything else at desktop proportions. The rest is up to us. */
+@media (max-width: 640px) {{
+
+  /* Columns keep their row on a phone and just get narrower, so the three
+     pricing tiers and the five-star breakdown arrive as unreadable slivers.
+     Stack them: a tall column beats five columns nothing fits in. */
+  [data-testid="stHorizontalBlock"] {{
+    flex-direction: column;
+    gap: 0.75rem;
+  }}
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
+    width: 100% !important;
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+  }}
+
+  /* Desktop gutters cost about a fifth of the usable width here. */
+  .block-container {{
+    padding-top: 1.2rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-bottom: 3rem;
+  }}
+
+  /* iOS Safari zooms the whole page in whenever a focused field is under 16px,
+     and it does not zoom back out afterwards -- so a seller who taps one form
+     field spends the rest of the session scrolling sideways. 16px is the
+     threshold, not a preference. */
+  input, textarea, select,
+  [data-testid="stChatInput"] textarea,
+  [data-baseweb="input"] input, [data-baseweb="textarea"] textarea,
+  [data-baseweb="select"] div {{
+    font-size: 16px !important;
+  }}
+
+  /* Anything with a fixed intrinsic width scrolls inside itself rather than
+     pushing the whole page sideways. */
+  [data-testid="stMarkdownContainer"] pre,
+  [data-testid="stMarkdownContainer"] table,
+  [data-testid="stDataFrame"] {{
+    max-width: 100%;
+    overflow-x: auto;
+  }}
+  [data-testid="stMarkdownContainer"] {{ overflow-wrap: anywhere; }}
+
+  /* Full-width tap targets. A stacked button that only spans half the column
+     is a small target next to a lot of dead space. */
+  .stButton > button, .stDownloadButton > button {{ width: 100%; }}
+
+  /* The rail is an overlay here, so it can afford to be wide enough to read. */
+  [data-testid="stSidebar"] {{ min-width: 17rem !important; }}
+}}
 </style>
 """
 

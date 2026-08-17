@@ -99,6 +99,33 @@ def test_a_screen_can_hand_off_to_another_mode():
     assert ocr_ui.PENDING_MODE_KEY not in at.session_state
 
 
+# --- Phones -----------------------------------------------------------------
+
+def test_the_stylesheet_survives_its_own_escaping():
+    """The CSS is built by an f-string, so every literal brace is doubled. Miss
+    one and the stylesheet is silently malformed from that point on -- the page
+    still renders, just unstyled below the mistake."""
+    from src import theme
+
+    for name, palette in theme.PALETTES.items():
+        css = theme._css(palette)
+        assert css.count("{") == css.count("}"), f"unbalanced braces in {name}"
+        assert "{{" not in css and "}}" not in css, f"unescaped braces in {name}"
+
+
+def test_phone_widths_are_styled_for():
+    """Without these the three pricing tiers and the five-star breakdown arrive
+    as slivers on a phone, and tapping any field zooms iOS Safari in for good."""
+    from src import theme
+
+    css = theme._css(theme.PALETTES["dark"])
+    assert "@media (max-width: 640px)" in css
+    # Columns stack rather than shrink.
+    assert "flex-direction: column" in css
+    # Under 16px, iOS zooms on focus and never zooms back.
+    assert "font-size: 16px !important" in css
+
+
 # --- The shell ---------------------------------------------------------------
 
 def test_the_header_names_the_page_you_are_on():
