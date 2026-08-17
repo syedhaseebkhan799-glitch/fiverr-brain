@@ -25,7 +25,7 @@ from typing import List, Optional
 
 from .schema import SellerProfile, format_number
 
-SECTION_TYPES = ("bio", "gig", "portfolio", "reviews")
+SECTION_TYPES = ("bio", "catalog", "gig", "portfolio", "reviews")
 
 # Chroma rejects a None in metadata, and a missing key cannot be matched by a
 # `where` filter, so every document gets every key with a real value.
@@ -150,6 +150,58 @@ def gig_document(profile: SellerProfile, gig, index: int) -> Optional[dict]:
                 profile.source_type, gig_id=gig_id)
 
 
+def catalog_document(profile: SellerProfile) -> Optional[dict]:
+    """Every gig and its prices in one place.
+
+    The per-gig documents each answer questions about *that* gig, and answer
+    nothing at all about the set of them. "What gigs do I offer and what do
+    they cost?" is close to no single gig, so it lands on whatever generic
+    business text is nearest -- in practice Fiverr's fee policy, which is not
+    the seller's prices and reads as a confident wrong answer.
+
+    Raising the relevance threshold does not fix that; it just lets the wrong
+    chunk through. What was missing is a chunk the question is actually about.
+    """
+    if not profile.gigs:
+        return None
+
+    seller_id = profile.resolved_seller_id()
+    lines = []
+    for index, gig in enumerate(profile.gigs, start=1):
+        title = (gig.title or f"Gig {index}").strip()
+        prices = []
+        for pkg in gig.packages:
+            if pkg.price is None:
+                continue
+            tier = (pkg.tier or "package").capitalize()
+            if pkg.currency and pkg.currency.upper() not in ("USD", "$"):
+                amount = f"{format_number(pkg.price)} {pkg.currency}"
+            else:
+                amount = f"${format_number(pkg.price)}"
+            prices.append(f"{tier} {amount}")
+        entry = f"- **{title}**"
+        if gig.category:
+            entry += f" ({gig.category.strip()})"
+        if prices:
+            entry += f" — {', '.join(prices)}"
+        lines.append(entry)
+
+    # Named the way the questions are asked, so the wording itself carries some
+    # of the match rather than leaving it all to the list below.
+    body = _lines(
+        "# Gigs and prices: what this seller offers",
+        f"This seller offers {len(profile.gigs)} "
+        f"{'gig' if len(profile.gigs) == 1 else 'gigs'} on Fiverr. "
+        "Full list of services, gigs and their package prices:",
+        "\n".join(lines),
+        "\nEach gig has its own document with the full description, package "
+        "contents, delivery times, extras and FAQs.",
+    )
+
+    return _doc(seller_id, "catalog", f"{seller_id}__catalog",
+                f"{seller_id}_gigs_and_prices.md", body, profile.source_type)
+
+
 def portfolio_document(profile: SellerProfile, item, index: int) -> Optional[dict]:
     seller_id = profile.resolved_seller_id()
     title = (item.title or f"Portfolio item {index + 1}").strip()
@@ -212,7 +264,7 @@ def reviews_document(profile: SellerProfile) -> Optional[dict]:
 
 def build_documents(profile: SellerProfile) -> List[dict]:
     """Every retrievable document for one seller."""
-    docs = [bio_document(profile)]
+    docs = [bio_document(profile), catalog_document(profile)]
     docs += [gig_document(profile, g, i) for i, g in enumerate(profile.gigs)]
     docs += [portfolio_document(profile, p, i)
              for i, p in enumerate(profile.portfolio)]

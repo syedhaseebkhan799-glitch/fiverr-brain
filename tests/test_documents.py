@@ -52,14 +52,39 @@ def profile(seller_id="doc_test_seller", source_type="manual") -> SellerProfile:
 # --- Splitting into logical units -------------------------------------------
 
 def test_one_document_per_logical_unit():
-    """The brief: bio, each gig, each portfolio item, a reviews digest."""
+    """The brief: bio, each gig, each portfolio item, a reviews digest -- plus
+    a catalog covering the set of gigs, which no per-gig document answers."""
     docs = documents.build_documents(profile())
     sections = [d["metadata"]["sectionType"] for d in docs]
     assert sections.count("bio") == 1
+    assert sections.count("catalog") == 1
     assert sections.count("gig") == 2
     assert sections.count("portfolio") == 1
     assert sections.count("reviews") == 1
-    assert len(docs) == 5
+    assert len(docs) == 6
+
+
+def test_the_catalog_lists_every_gig_with_its_prices():
+    """"What do I offer and what does it cost?" is close to no single gig, so
+    without this it retrieved the nearest generic business text instead --
+    Fiverr's fee policy, which is not the seller's prices."""
+    docs = documents.build_documents(profile())
+    catalog = next(d for d in docs if d["metadata"]["sectionType"] == "catalog")
+
+    for gig in profile().gigs:
+        assert gig.title in catalog["text"]
+    # Prices, not just names: the question asks what they cost.
+    assert "$50" in catalog["text"]
+
+
+def test_a_seller_with_no_gigs_gets_no_catalog():
+    """An empty list is not worth a chunk, and a chunk saying nothing is one
+    more thing for a real question to match against by accident."""
+    p = profile()
+    p.gigs = []
+    sections = [d["metadata"]["sectionType"]
+                for d in documents.build_documents(p)]
+    assert "catalog" not in sections
 
 
 def test_reviews_are_one_digest_not_one_document_each():

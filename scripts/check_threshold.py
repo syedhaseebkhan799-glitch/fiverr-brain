@@ -29,6 +29,14 @@ SHOULD_MATCH = [
     ("what is your refund policy", "policies"),
     ("tell me about the AI influencer gig", "profile_gigs"),
     ("Hi, I need 3 n8n workflows by Friday.", None),
+    # Questions about the set of gigs rather than one of them. These sit far
+    # from every individual gig document, so before the catalog document
+    # existed they either missed outright or matched Fiverr's fee policy --
+    # which is not the seller's prices. Kept here so a future change to the
+    # document split cannot quietly break them again.
+    ("What gigs do I offer and what do they cost?", None),
+    ("list my gigs", None),
+    ("what are my prices", None),
 ]
 
 SHOULD_NOT_MATCH = [
